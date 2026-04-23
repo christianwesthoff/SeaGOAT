@@ -11,7 +11,7 @@ import requests
 from click.testing import CliRunner
 
 from seagoat import __version__
-from seagoat.cli import query_server, seagoat, warn_if_update_available
+from seagoat.cli import cli, query_server, seagoat, warn_if_update_available
 from seagoat.utils.cli_display import is_bat_installed
 from seagoat.utils.server import update_server_info
 from tests.conftest import MagicMock
@@ -543,6 +543,55 @@ def test_version_option(runner):
     assert result.output.strip() == f"seagoat, version {__version__}"
 
 
+def test_mcp_server_subcommand_is_listed(runner):
+    result = runner.invoke(seagoat, ["--help"])
+
+    assert result.exit_code == 0
+    assert "mcp-server" in result.output
+    assert "Usage: seagoat [OPTIONS] QUERY [REPO_PATH]" in result.output
+    assert "--version" in result.output
+    assert "--no-color" in result.output
+    assert "COMMAND [ARGS]" not in result.output
+
+
+def test_mcp_server_subcommand_help_is_available(runner):
+    result = runner.invoke(cli, ["mcp-server", "--help"])
+
+    assert result.exit_code == 0
+    assert "Usage: seagoat mcp-server [OPTIONS]" in result.output
+
+
+def test_mcp_server_subcommand_placeholder_is_friendly(runner):
+    result = runner.invoke(cli, ["mcp-server"], expect_errors=True)
+
+    assert result.exit_code == 1
+    assert (
+        "MCP server support is not available in this build yet." in result.stderr
+    )
+
+
+def test_seagoat_query_invocation_still_works(runner, mocker, repo):
+    mocked_run_search_command = mocker.patch(
+        "seagoat.cli.run_search_command", return_value=0
+    )
+
+    result = runner.invoke(cli, ["JavaScript", repo.working_dir, "--no-color"])
+
+    assert result.exit_code == 0
+    mocked_run_search_command.assert_called_once_with(
+        "JavaScript",
+        repo.working_dir,
+        True,
+        None,
+        None,
+        None,
+        None,
+        False,
+        False,
+        False,
+    )
+
+
 @pytest.mark.parametrize(
     "repo_path",
     [
@@ -573,7 +622,10 @@ def test_server_is_not_running_error(mocker, repo_path, snapshot, mock_halo):
 def test_documentation_present(runner):
     result = runner.invoke(seagoat, ["--help"])
     assert result.exit_code == 0
+    assert "Options:" in result.output
     assert "Query your codebase for your QUERY" in result.output
+    assert "Usage: seagoat [OPTIONS] QUERY [REPO_PATH]" in result.output
+    assert "--version" in result.output
 
 
 @pytest.mark.usefixtures("mock_accuracy_warning")

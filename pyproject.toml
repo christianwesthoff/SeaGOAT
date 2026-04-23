@@ -7,8 +7,8 @@ readme = "README.md"
 license = "MIT"
 
 [tool.poetry.scripts]
-gt = "seagoat.cli:seagoat"
-seagoat = "seagoat.cli:seagoat"
+gt = "seagoat.cli:cli"
+seagoat = "seagoat.cli:cli"
 seagoat-server = "seagoat.server:server"
 
 [tool.poetry.dependencies]
