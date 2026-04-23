@@ -22,6 +22,9 @@ seagoat <query> [repo_path] [OPTIONS]
     you would be prompted to start the server using
     `seagoat-server start {repo_path} command`.
 
+    `seagoat` also exposes the `mcp-server` subcommand for Codex and other MCP
+    clients.
+
 ## Arguments
 
 * `query`: This is a required argument.

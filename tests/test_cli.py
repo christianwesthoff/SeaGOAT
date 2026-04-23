@@ -628,6 +628,24 @@ def test_documentation_present(runner):
     assert "--version" in result.output
 
 
+def test_readme_mentions_mcp_support():
+    contents = Path("README.md").read_text(encoding="utf-8")
+
+    assert "seagoat mcp-server" in contents
+    assert "codex mcp add seagoat -- seagoat mcp-server" in contents
+
+
+def test_mcp_docs_page_is_listed_and_documents_codex_stdio_setup():
+    mkdocs_contents = Path("mkdocs.yml").read_text(encoding="utf-8")
+    docs_contents = Path("docs/mcp.md").read_text(encoding="utf-8")
+    usage_contents = Path("docs/usage.md").read_text(encoding="utf-8")
+
+    assert "MCP Integration: mcp.md" in mkdocs_contents
+    assert "codex mcp add seagoat -- seagoat mcp-server" in docs_contents
+    assert "seagoat-server start /path/to/your/repo" in docs_contents
+    assert "seagoat` also exposes the `mcp-server` subcommand" in usage_contents
+
+
 @pytest.mark.usefixtures("mock_accuracy_warning")
 @pytest.mark.parametrize("context_above", [1, 2, 10])
 def test_forwards_context_above_to_server(

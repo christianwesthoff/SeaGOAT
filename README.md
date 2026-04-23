@@ -78,6 +78,27 @@ in your queries, for example
 gt "function calc_.* that deals with taxes"
 ```
 
+### Use SeaGOAT from Codex via MCP
+
+SeaGOAT includes a native local MCP server for Codex and other MCP clients:
+
+```bash
+seagoat mcp-server
+```
+
+To register it with Codex:
+
+```bash
+codex mcp add seagoat -- seagoat mcp-server
+```
+
+SeaGOAT's MCP server expects a SeaGOAT repo server to already be running for
+the target repository:
+
+```bash
+seagoat-server start /path/to/your/repo
+```
+
 ### Stopping the server
 
 You can stop the running server using the following command:
