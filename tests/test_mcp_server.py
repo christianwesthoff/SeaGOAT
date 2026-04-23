@@ -1,8 +1,20 @@
+import os
+import sys
+import tempfile
+from contextlib import contextmanager
+from pathlib import Path
+from subprocess import Popen, TimeoutExpired
+
 import pytest
+import requests
+import orjson
+from mcp import ClientSession
+from mcp.client.stdio import StdioServerParameters, stdio_client
 
 from seagoat.cli import cli
 from seagoat.mcp_tools.search import build_summary, run_search_tool, validate_repo_path
-from seagoat.utils.server import ServerDoesNotExist
+from seagoat.utils.server import ServerDoesNotExist, get_server_info
+from seagoat.utils.wait import wait_for
 
 
 def test_validate_repo_path_rejects_missing_directory(tmp_path):
@@ -87,3 +99,129 @@ def test_mcp_server_subcommand_imports_real_module_and_calls_main(runner, mocker
 
     assert result.exit_code == 0
     mocked_main.assert_called_once_with()
+
+
+@contextmanager
+def running_seagoat_server(repo_path: str):
+    original_home = os.environ.get("HOME")
+    original_xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
+    process = None
+
+    with tempfile.TemporaryDirectory() as temp_home:
+        os.environ["HOME"] = temp_home
+        os.environ["XDG_CACHE_HOME"] = temp_home
+
+        try:
+            process = Popen(
+                [sys.executable, "-m", "seagoat.server", "start", repo_path],
+                cwd=Path(__file__).resolve().parents[1],
+                env=os.environ.copy(),
+            )
+
+            def server_info_exists():
+                try:
+                    get_server_info(repo_path)
+                except ServerDoesNotExist:
+                    return False
+                return True
+
+            wait_for(server_info_exists, timeout=5.0)
+            server_address = get_server_info(repo_path)["address"]
+
+            def server_is_ready():
+                try:
+                    return requests.get(f"{server_address}/status", timeout=5).ok
+                except requests.RequestException:
+                    return False
+
+            wait_for(server_is_ready, timeout=10.0)
+
+            yield server_address
+        finally:
+            if original_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = original_home
+            if original_xdg_cache_home is None:
+                os.environ.pop("XDG_CACHE_HOME", None)
+            else:
+                os.environ["XDG_CACHE_HOME"] = original_xdg_cache_home
+
+            if process is not None and process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+
+
+def stdio_server_params() -> StdioServerParameters:
+    return StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "seagoat.cli", "mcp-server"],
+        cwd=Path(__file__).resolve().parents[1],
+    )
+
+
+@pytest.mark.anyio
+async def test_search_tool_over_stdio(repo):
+    with running_seagoat_server(repo.working_dir) as server:
+        async with stdio_client(stdio_server_params()) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+
+                tools = await session.list_tools()
+                search_tool = next(tool for tool in tools.tools if tool.name == "search")
+
+                assert set(search_tool.inputSchema["required"]) == {
+                    "query",
+                    "repo_path",
+                }
+
+                result = await session.call_tool(
+                    "search",
+                    {
+                        "query": "Markdown",
+                        "repo_path": repo.working_dir,
+                    },
+                )
+
+    assert result.isError is False
+    assert result.structuredContent is not None
+    assert len(result.content) == 1
+
+    payload = orjson.loads(result.content[0].text)
+
+    assert result.structuredContent["repo_path"] == str(
+        Path(repo.working_dir).resolve()
+    )
+    assert result.structuredContent["server_address"] == server
+    assert result.structuredContent["result_count"] >= 1
+    assert result.structuredContent["summary"] == build_summary(
+        query="Markdown",
+        repo_path=str(Path(repo.working_dir).resolve()),
+        result_count=result.structuredContent["result_count"],
+    )
+    assert payload == result.structuredContent
+
+
+@pytest.mark.anyio
+async def test_search_tool_over_stdio_reports_missing_repo_server(repo):
+    async with stdio_client(stdio_server_params()) as (read_stream, write_stream):
+        async with ClientSession(read_stream, write_stream) as session:
+            await session.initialize()
+
+            result = await session.call_tool(
+                "search",
+                {
+                    "query": "Markdown",
+                    "repo_path": repo.working_dir,
+                },
+            )
+
+    assert result.isError is True
+    assert result.structuredContent is None
+    assert len(result.content) == 1
+    assert "No SeaGOAT server is running for" in result.content[0].text
+    assert "seagoat-server start" in result.content[0].text
