@@ -821,9 +821,8 @@ def test_server_error_handling(
     mocker,
     error_message,
     error_code,
+    runner_with_error,
 ):
-    runner = CliRunner()
-
     mocker.patch(
         "seagoat.cli.get_server_info",
         return_value={"address": "http://localhost:31337"},
@@ -841,7 +840,9 @@ def test_server_error_handling(
     mocker.patch("seagoat.query_service.requests.post", return_value=mock_response)
 
     query = "JavaScript"
-    result = runner.invoke(seagoat, [query, repo.working_dir, "--no-color", "-l2", "--context=3"])
+    result = runner_with_error.invoke(
+        seagoat, [query, repo.working_dir, "--no-color", "-l2", "--context=3"]
+    )
 
     assert result.exit_code == 4
     assert error_message in result.stderr

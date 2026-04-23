@@ -1,5 +1,6 @@
 import os
 import sys
+import inspect
 
 # Must be set before seagoat imports - config.py reads this at module load time
 os.environ["PYTEST_CURRENT_TEST"] = "true"
@@ -459,6 +460,9 @@ def mock_halo(mocker):
 
 @pytest.fixture
 def runner_with_error(mocker, mock_halo):
+    parameters = inspect.signature(CliRunner).parameters
+    if "mix_stderr" in parameters:
+        return CliRunner(mix_stderr=False)
     return CliRunner()
 
 

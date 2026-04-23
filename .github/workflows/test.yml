@@ -27,6 +27,9 @@ jobs:
               with:
                   python-version: ${{ matrix.python-version }}
 
+            - name: Install uv
+              uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
             - name: Install ripgrep
               run: |
                   if [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
@@ -38,24 +41,14 @@ jobs:
                     brew install ripgrep
                   fi
 
-            - name: Install Poetry
-              uses: snok/install-poetry@76e04a911780d5b312d89783f7b1cd627778900a # v1
-
-            - name: Install dependencies on macOS
-              if: runner.os == 'macOS'
+            - name: Sync dependencies
               run: |
                   export HNSWLIB_NO_NATIVE=1
-                  arch -x86_64 poetry install --no-interaction --no-root
-
-            - name: Install dependencies on other OS
-              if: runner.os != 'macOS'
-              run: |
-                  export HNSWLIB_NO_NATIVE=1
-                  poetry install --no-interaction --no-root
+                  uv sync
 
             - name: Run pytest
               run: |
-                  poetry run pytest . -vvs --timeout=300 --cov seagoat --cov-report=xml
+                  uv run pytest . -vvs --timeout=300 --cov seagoat --cov-report=xml
 
             - name: Upload coverage reports to Codecov
               uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de # v5-beta
