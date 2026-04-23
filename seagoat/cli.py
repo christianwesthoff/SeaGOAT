@@ -314,20 +314,10 @@ def search(
 
 @cli.command(name="mcp-server", help=MCP_SERVER_HELP)
 def mcp_server():
-    try:
-        from seagoat.mcp_server import main
-    except ModuleNotFoundError as error:
-        if error.name != "seagoat.mcp_server":
-            raise
+    """Start the SeaGOAT MCP server over stdio."""
+    from seagoat.mcp_server import main
 
-        click.echo(
-            "MCP server support is not available in this build yet. "
-            "It will be added in a later task.",
-            err=True,
-        )
-        raise SystemExit(1)
-
-    raise SystemExit(main())
+    main()
 
 
 seagoat = cli

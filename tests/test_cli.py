@@ -561,13 +561,13 @@ def test_mcp_server_subcommand_help_is_available(runner):
     assert "Usage: seagoat mcp-server [OPTIONS]" in result.output
 
 
-def test_mcp_server_subcommand_placeholder_is_friendly(runner):
-    result = runner.invoke(cli, ["mcp-server"], expect_errors=True)
+def test_mcp_server_subcommand_imports_real_module_and_calls_main(runner, mocker):
+    mocked_main = mocker.patch("seagoat.mcp_server.main", return_value=0)
 
-    assert result.exit_code == 1
-    assert (
-        "MCP server support is not available in this build yet." in result.stderr
-    )
+    result = runner.invoke(cli, ["mcp-server"])
+
+    assert result.exit_code == 0
+    mocked_main.assert_called_once_with()
 
 
 def test_seagoat_query_invocation_still_works(runner, mocker, repo):
