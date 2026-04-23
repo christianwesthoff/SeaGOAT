@@ -117,8 +117,15 @@ class TaskQueue(BaseQueue):
 
         return serialized_results
 
-    def handle_get_stats(self, context):
-        engine = context["seagoat_engine"]
+    def get_stats(self):
+        if self._context is None:
+            return {
+                "queue": {"size": self._task_queue.qsize()},
+                "chunks": {"analyzed": 0, "unanalyzed": 0},
+                "accuracy": {"percentage": 100},
+            }
+
+        engine = self._context["seagoat_engine"]
         analyzed_count = len(engine.cache.data["chunks_already_analyzed"])
         unanalyzed_count = len(engine.cache.data["chunks_not_yet_analyzed"])
         total_chunks = analyzed_count + unanalyzed_count
@@ -135,3 +142,6 @@ class TaskQueue(BaseQueue):
                 "percentage": calculate_accuracy(analyzed_count, total_chunks),
             },
         }
+
+    def handle_get_stats(self, context):
+        return self.get_stats()

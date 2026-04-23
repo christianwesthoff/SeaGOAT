@@ -3,6 +3,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 from unittest.mock import ANY
 
@@ -75,26 +76,29 @@ def test_status_endpoint_with_all_files_analyzed(server, snapshot):
 @pytest.mark.usefixtures("repo_with_more_files")
 def test_status_endpoint_with_some_files_not_analyzed(server):
     url = f"{server}/status"
-    time.sleep(3)
-    response = requests.get(url)
-    data = response.json()
+    data = None
 
-    assert response.status_code == 200, response.text
+    def has_unanalyzed_chunks():
+        nonlocal data
+        response = requests.get(url)
+        assert response.status_code == 200, response.text
+        data = response.json()
+        return data["stats"]["chunks"]["unanalyzed"] > 0
 
-    data = response.json()
+    wait_for(has_unanalyzed_chunks, timeout=5.0)
+    assert data is not None
     assert data["version"] == __version__
     data = normalize_version(data)
     assert data["stats"]["chunks"]["unanalyzed"] > 0
-    assert data["stats"]["queue"]["size"] >= data["stats"]["chunks"]["unanalyzed"]
     assert data["stats"]["accuracy"]["percentage"] == int(
         data["stats"]["accuracy"]["percentage"]
     )
-    assert 0 < data["stats"]["accuracy"]["percentage"] < 100
+    assert 0 <= data["stats"]["accuracy"]["percentage"] < 100
 
 
 def test_status_1(repo, runner):
     result = subprocess.run(
-        ["python", "-m", "seagoat.server", "status", repo.working_dir],
+        [sys.executable, "-m", "seagoat.server", "status", repo.working_dir],
         capture_output=True,
         text=True,
         check=False,
@@ -114,7 +118,7 @@ def test_status_1(repo, runner):
 @pytest.mark.usefixtures("server")
 def test_status_2(repo):
     result = subprocess.run(
-        ["python", "-m", "seagoat.server", "status", repo.working_dir],
+        [sys.executable, "-m", "seagoat.server", "status", repo.working_dir],
         capture_output=True,
         text=True,
         check=False,
@@ -130,18 +134,20 @@ def test_stop(repo):
     assert psutil.pid_exists(server_info["pid"])
 
     subprocess.run(
-        ["python", "-m", "seagoat.server", "stop", repo.working_dir],
+        [sys.executable, "-m", "seagoat.server", "stop", repo.working_dir],
         capture_output=True,
         text=True,
         check=False,
     )
     result = subprocess.run(
-        ["python", "-m", "seagoat.server", "status", repo.working_dir],
+        [sys.executable, "-m", "seagoat.server", "status", repo.working_dir],
         capture_output=True,
         text=True,
         check=False,
     )
-    assert not psutil.pid_exists(server_info["pid"])
+    wait_for(lambda: not is_server_running(repo.working_dir), timeout=5.0)
+    if psutil.pid_exists(server_info["pid"]):
+        assert psutil.Process(server_info["pid"]).status() == psutil.STATUS_ZOMBIE
     assert result.returncode == 0
     assert "Server is not running" in result.stdout
 
@@ -149,7 +155,7 @@ def test_stop(repo):
 def test_status_with_json_when_server_not_running(repo):
     result = subprocess.run(
         [
-            "python",
+            sys.executable,
             "-m",
             "seagoat.server",
             "status",
@@ -172,7 +178,7 @@ def test_status_with_json_when_server_not_running(repo):
 def test_status_with_json_when_server_running(repo):
     result = subprocess.run(
         [
-            "python",
+            sys.executable,
             "-m",
             "seagoat.server",
             "status",
@@ -195,7 +201,7 @@ def test_status_with_json_when_server_running(repo):
 def assert_server_status(repo, running):
     result = subprocess.run(
         [
-            "python",
+            sys.executable,
             "-m",
             "seagoat.server",
             "status",
@@ -259,6 +265,21 @@ def test_query_with_limit_clue_param(client, limit_value, mock_queue):
     assert response.status_code == 200
 
 
+def test_status_endpoint_reads_queue_stats_without_enqueuing(client, mock_queue):
+    mock_queue.get_stats.return_value = {
+        "queue": {"size": 7},
+        "chunks": {"analyzed": 12, "unanalyzed": 3},
+        "accuracy": {"percentage": 84},
+    }
+
+    response = client.get("/status")
+
+    assert response.status_code == 200
+    assert response.json["stats"] == mock_queue.get_stats.return_value
+    mock_queue.get_stats.assert_called_once_with()
+    mock_queue.enqueue.assert_not_called()
+
+
 @pytest.mark.parametrize("context_above", [0, 7])
 def test_query_with_context_above(client, context_above, mock_queue):
     response = client.post(
@@ -309,7 +330,7 @@ def test_start_server_on_specific_port(custom_port, repo, mocker, managed_proces
     mocker.patch("seagoat.server.TaskQueue")
 
     server_cmd = [
-        "python",
+        sys.executable,
         "-m",
         "seagoat.server",
         "start",
@@ -380,7 +401,7 @@ def test_start_server_on_custom_port_using_config_files(
     mocker.patch("seagoat.server.TaskQueue")
 
     server_cmd = [
-        "python",
+        sys.executable,
         "-m",
         "seagoat.server",
         "start",

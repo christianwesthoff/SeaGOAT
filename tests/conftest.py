@@ -1,4 +1,5 @@
 import os
+import sys
 
 # Must be set before seagoat imports - config.py reads this at module load time
 os.environ["PYTEST_CURRENT_TEST"] = "true"
@@ -263,7 +264,7 @@ def real_chromadb():
 
 
 def _get_multiprocessing_context():
-    if os.name == "nt":
+    if os.name == "nt" or sys.platform == "darwin":
         return multiprocessing.get_context("spawn")
     return multiprocessing.get_context("forkserver")
 
@@ -458,7 +459,7 @@ def mock_halo(mocker):
 
 @pytest.fixture
 def runner_with_error(mocker, mock_halo):
-    return CliRunner(mix_stderr=False)
+    return CliRunner()
 
 
 @pytest.fixture
@@ -569,10 +570,10 @@ def _create_prepared_seagoat(repo):
 
 @pytest.fixture
 def repo_with_more_files(repo):
-    for i in range(250):
+    for i in range(20):
         repo.add_file_change_commit(
             file_name=f"file{i}.py",
-            contents=("hello()\n" * (i % 50)),
+            contents="hello_world()\n" * 500,
             author=repo.actors["John Doe"],
             commit_message=f"add file{i}.py",
         )

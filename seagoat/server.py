@@ -99,9 +99,7 @@ def create_app(repo_path):
 
     @app.route("/status")
     def status_():
-        stats = current_app.extensions["task_queue"].enqueue(
-            "get_stats",
-        )
+        stats = current_app.extensions["task_queue"].get_stats()
         return {
             "stats": stats,
             "version": __version__,

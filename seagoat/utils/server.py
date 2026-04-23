@@ -1,6 +1,7 @@
 import os
 import socket
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Dict, TypedDict, Union
 
@@ -22,7 +23,15 @@ class ServerDoesNotExist(Exception):
 
 
 def _get_server_data_file_path() -> Path:
-    user_cache_dir = Path(appdirs.user_cache_dir("seagoat-servers"))
+    if "RUNNER_TEMP" in os.environ:
+        user_cache_dir = Path(os.environ["RUNNER_TEMP"]) / "seagoat-servers"
+    elif "XDG_CACHE_HOME" in os.environ:
+        user_cache_dir = Path(os.environ["XDG_CACHE_HOME"]) / "seagoat-servers"
+    elif "PYTEST_CURRENT_TEST" in os.environ:
+        user_cache_dir = Path(tempfile.gettempdir()) / "seagoat-pytest" / "servers"
+    else:
+        user_cache_dir = Path(appdirs.user_cache_dir("seagoat-servers"))
+
     user_cache_dir.mkdir(parents=True, exist_ok=True)
     return user_cache_dir / "serverData.json"
 
@@ -67,8 +76,19 @@ def stop_server(repo_path: Union[str, Path]) -> None:
         servers_info.pop(repo_id)
         write_to_json_file(_get_server_data_file_path(), servers_info)
 
-        process.terminate()
-        process.wait()
+        try:
+            process.kill()
+        except psutil.NoSuchProcess:
+            return
+
+        try:
+            process.wait(timeout=1)
+        except (psutil.NoSuchProcess, psutil.TimeoutExpired):
+            try:
+                if process.status() == psutil.STATUS_ZOMBIE:
+                    return
+            except psutil.NoSuchProcess:
+                return
     else:
         raise ServerDoesNotExist(f"Server for {repo_path} does not exist.")
 

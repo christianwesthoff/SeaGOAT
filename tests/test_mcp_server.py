@@ -160,6 +160,7 @@ def stdio_server_params() -> StdioServerParameters:
     return StdioServerParameters(
         command=sys.executable,
         args=["-m", "seagoat.cli", "mcp-server"],
+        env=os.environ.copy(),
         cwd=Path(__file__).resolve().parents[1],
     )
 

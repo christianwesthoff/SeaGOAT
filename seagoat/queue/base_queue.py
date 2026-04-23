@@ -23,6 +23,7 @@ class BaseQueue:
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         self._task_queue = PriorityQueue()
+        self._context = None
         self._worker_thread = threading.Thread(target=self._worker_function)
         self._worker_thread.start()
 
@@ -71,7 +72,8 @@ class BaseQueue:
 
     def _worker_function(self):
         logging.info("Starting worker thread...")
-        context = self._get_context()
+        self._context = self._get_context()
+        context = self._context
 
         while True:
             try:
