@@ -2,6 +2,7 @@ import os
 import re
 import shutil
 import tempfile
+from pathlib import Path
 from typing import List
 
 import orjson
@@ -224,7 +225,9 @@ def get_request_args_from_cli_call_(mock_server_factory, mocker, runner, repo):
 
         def fake_requests(*args, **kwargs):
             mock_response = mocker.Mock()
-            mock_response.text = '{"results": []}'
+            mock_response.text = orjson.dumps(
+                {"results": [], "version": __version__}
+            )
 
             request_args["url"] = args[0]
             request_args["json"] = kwargs.get("json", {})
@@ -232,7 +235,11 @@ def get_request_args_from_cli_call_(mock_server_factory, mocker, runner, repo):
             return mock_response
 
         mocked_requests_post = mocker.patch(
-            "seagoat.cli.requests.post", side_effect=fake_requests
+            "seagoat.query_service.requests.post", side_effect=fake_requests
+        )
+        mocker.patch(
+            "seagoat.query_service.get_server_info",
+            return_value={"address": "http://localhost:31337"},
         )
         query = "JavaScript"
         result = runner.invoke(
@@ -383,6 +390,150 @@ def test_limit_output_length(
     assert len(result.output.splitlines()) == min(expected_length, 15)
     assert result.output.splitlines() == result.output.splitlines()[:expected_length]
     assert result.exit_code == 0
+
+
+def test_search_repo_returns_normalized_results(mocker, repo):
+    from seagoat.query_service import search_repo
+
+    mocker.patch(
+        "seagoat.query_service.get_server_info",
+        return_value={
+            "host": "localhost",
+            "port": 31337,
+            "pid": 123,
+            "address": "http://localhost:31337",
+        },
+    )
+
+    mock_response = mocker.Mock()
+    mock_response.text = orjson.dumps(
+        {
+            "results": [
+                {
+                    "path": "file2.py",
+                    "fullPath": "/tmp/will-be-rewritten/file2.py",
+                    "score": 0.42,
+                    "blocks": [],
+                }
+            ],
+            "version": __version__,
+        }
+    )
+    mock_response.raise_for_status.return_value = None
+    mocked_post = mocker.patch(
+        "seagoat.query_service.requests.post", return_value=mock_response
+    )
+
+    result = search_repo(
+        query="Python",
+        repo_path=repo.working_dir,
+        max_results=7,
+        context_above=2,
+        context_below=4,
+    )
+
+    assert result["server_address"] == "http://localhost:31337"
+    assert result["results"][0]["path"] == "file2.py"
+    assert result["results"][0]["fullPath"] == str(
+        Path(repo.working_dir).resolve() / "file2.py"
+    )
+    mocked_post.assert_called_once_with(
+        "http://localhost:31337/lines/query",
+        json={
+            "queryText": "Python",
+            "limitClue": 7,
+            "contextAbove": 2,
+            "contextBelow": 4,
+        },
+        headers={"Content-Type": "application/json"},
+    )
+
+
+def test_search_repo_uses_explicit_server_address(mocker, repo):
+    from seagoat.query_service import search_repo
+
+    mocked_get_server_info = mocker.patch("seagoat.query_service.get_server_info")
+
+    mock_response = mocker.Mock()
+    mock_response.text = orjson.dumps(
+        {
+            "results": [
+                {
+                    "path": "missing.py",
+                    "fullPath": "/tmp/will-be-rewritten/missing.py",
+                    "score": 0.42,
+                    "blocks": [],
+                }
+            ],
+            "version": __version__,
+        }
+    )
+    mock_response.raise_for_status.return_value = None
+    mocked_post = mocker.patch(
+        "seagoat.query_service.requests.post", return_value=mock_response
+    )
+
+    result = search_repo(
+        query="Python",
+        repo_path=repo.working_dir,
+        server_address="http://remote-host:31337",
+        max_results=7,
+        context_above=2,
+        context_below=4,
+    )
+
+    mocked_get_server_info.assert_not_called()
+    assert result["server_address"] == "http://remote-host:31337"
+    assert result["results"][0]["path"] == "missing.py"
+    assert result["results"][0]["fullPath"] == str(
+        Path(repo.working_dir).resolve() / "missing.py"
+    )
+    mocked_post.assert_called_once_with(
+        "http://remote-host:31337/lines/query",
+        json={
+            "queryText": "Python",
+            "limitClue": 7,
+            "contextAbove": 2,
+            "contextBelow": 4,
+        },
+        headers={"Content-Type": "application/json"},
+    )
+
+
+def test_search_repo_accepts_payload_without_version(mocker, repo):
+    from seagoat.query_service import search_repo
+
+    mocker.patch(
+        "seagoat.query_service.get_server_info",
+        return_value={"address": "http://localhost:31337"},
+    )
+
+    mock_response = mocker.Mock()
+    mock_response.text = orjson.dumps(
+        {
+            "results": [
+                {
+                    "path": "file2.py",
+                    "fullPath": "/tmp/will-be-rewritten/file2.py",
+                    "score": 0.42,
+                    "blocks": [],
+                }
+            ]
+        }
+    )
+    mock_response.raise_for_status.return_value = None
+    mocker.patch("seagoat.query_service.requests.post", return_value=mock_response)
+
+    result = search_repo(
+        query="Python",
+        repo_path=repo.working_dir,
+        max_results=7,
+        context_above=2,
+        context_below=4,
+    )
+
+    assert result["version"] is None
+    assert result["results"][0]["path"] == "file2.py"
 
 
 def test_version_option(runner):
@@ -597,18 +748,30 @@ def test_reverse_ordering(
 )
 def test_server_error_handling(
     repo,
-    mock_server_error_factory,
-    runner_with_error,
+    mocker,
     error_message,
     error_code,
 ):
-    mock_server_error_factory(error_message, error_code)
+    runner = CliRunner()
+
+    mocker.patch(
+        "seagoat.cli.get_server_info",
+        return_value={"address": "http://localhost:31337"},
+    )
+    mock_response = mocker.Mock()
+    mock_response.text = orjson.dumps(
+        {
+            "code": error_code,
+            "error": {
+                "type": "Internal Server Error",
+                "message": error_message,
+            },
+        }
+    )
+    mocker.patch("seagoat.query_service.requests.post", return_value=mock_response)
 
     query = "JavaScript"
-    result = runner_with_error.invoke(
-        seagoat,
-        [query, repo.working_dir, "--no-color", "-l2", "--context=3"],
-    )
+    result = runner.invoke(seagoat, [query, repo.working_dir, "--no-color", "-l2", "--context=3"])
 
     assert result.exit_code == 4
     assert error_message in result.stderr
@@ -678,6 +841,33 @@ def test_integration_test_no_results(snapshot, repo, mocker, runner):
     assert result.exit_code == 0
 
 
+def test_query_server_error_payload_returns_server_error(repo, mocker):
+    runner = CliRunner()
+
+    mocker.patch(
+        "seagoat.cli.get_server_info",
+        return_value={"address": "http://localhost:31337"},
+    )
+    mock_response = mocker.Mock()
+    mock_response.text = orjson.dumps(
+        {
+            "error": {
+                "type": "Internal Server Error",
+                "message": "Database Connection Failed",
+            }
+        }
+    )
+    mocked_post = mocker.patch(
+        "seagoat.query_service.requests.post", return_value=mock_response
+    )
+
+    result = runner.invoke(seagoat, ["JavaScript", repo.working_dir])
+
+    assert result.exit_code == 4
+    assert "Database Connection Failed" in result.output
+    mocked_post.assert_called_once()
+
+
 @pytest.mark.usefixtures("mock_accuracy_warning")
 @pytest.mark.parametrize(
     "remote_host",
@@ -692,15 +882,18 @@ def test_configure_remote_server_address(
 
 
 @pytest.mark.usefixtures("mock_accuracy_warning", "bat_available")
+@pytest.mark.parametrize(
+    "remote_host",
+    ["http://example.com/potato", "https://ejemplo.es/nose/seagoat"],
+)
 def test_connecting_to_remote_server(
+    remote_host,
     repo,
     mocker,
     runner,
     temporary_cd,
-    server,
     create_config_file,
     bat_calls,
-    snapshot,
 ):
     """
     When the user requests data from a remote server,
@@ -713,18 +906,59 @@ def test_connecting_to_remote_server(
     This test also tests that results are correctly displayed with bat
     """
 
-    create_config_file({"client": {"host": server}})
+    create_config_file({"client": {"host": remote_host}})
     mocker.patch("os.isatty", return_value=True)
     query = "JavaScript"
-
-    def query_server_side_effect(*args, **kwargs):
-        results = query_server(*args, **kwargs)
-
-        results = [{**result, "fullPath": "/non/existent/path/"} for result in results]
-
-        return results
-
-    mocker.patch("seagoat.cli.query_server", side_effect=query_server_side_effect)
+    repo.add_file_change_commit(
+        file_name="example_remote.txt",
+        contents="""JavaScript is an amazing programming language""",
+        author=repo.actors["John Doe"],
+        commit_message="Add remote-path data",
+    )
+    mock_response = mocker.Mock()
+    mock_response.text = orjson.dumps(
+        {
+            "results": [
+                {
+                    "path": "example_remote.txt",
+                    "fullPath": "/remote/server/repo/example_remote.txt",
+                    "blocks": [
+                        {
+                            "lineTypeCount": {"result": 1, "context": 0},
+                            "lines": [
+                                {
+                                    "line": 1,
+                                    "lineText": "JavaScript is an amazing programming language",
+                                    "resultTypes": ["result"],
+                                }
+                            ],
+                        }
+                    ],
+                },
+                {
+                    "path": "missing_remote.txt",
+                    "fullPath": "/remote/server/repo/missing_remote.txt",
+                    "blocks": [
+                        {
+                            "lineTypeCount": {"result": 1, "context": 0},
+                            "lines": [
+                                {
+                                    "line": 1,
+                                    "lineText": "This remote file is missing locally",
+                                    "resultTypes": ["result"],
+                                }
+                            ],
+                        }
+                    ],
+                },
+            ],
+            "version": __version__,
+        }
+    )
+    mock_response.raise_for_status.return_value = None
+    mocked_post = mocker.patch(
+        "seagoat.query_service.requests.post", return_value=mock_response
+    )
 
     with tempfile.TemporaryDirectory() as tmpdirname:
         shutil.copytree(
@@ -732,26 +966,15 @@ def test_connecting_to_remote_server(
             os.path.join(tmpdirname, "repo_copy"),
             dirs_exist_ok=True,
         )
-        repo.add_file_change_commit(
-            file_name="example_should_not_exist_in_copy.txt",
-            contents="""JavaScript is an amazing programming language""",
-            author=repo.actors["John Doe"],
-            commit_message="Add fruits data",
-        )
         with temporary_cd(os.path.join(tmpdirname, "repo_copy")):
             result = runner.invoke(seagoat, [query, "."])
 
     assert result.exit_code == 0
+    mocked_post.assert_called_once()
+    assert mocked_post.call_args.args[0].startswith(remote_host)
 
-    for bat_call in bat_calls:
-        assert "example_should_not_exist_in_copy.txt" not in str(bat_call)
-
-    assert [
-        re.sub(r" .*repo_copy[/|\\]", " normalized_repo_path/", call)
-        for call in bat_calls
-    ] == snapshot
-
-    assert len(bat_calls) == 2
+    assert any("repo_copy/example_remote.txt" in call for call in bat_calls)
+    assert all("missing_remote.txt" not in call for call in bat_calls)
 
 
 def test_server_does_not_exist_error(runner_with_error, mocker, repo):

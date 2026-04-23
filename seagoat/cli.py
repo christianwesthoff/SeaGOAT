@@ -8,6 +8,10 @@ import requests
 from halo import Halo
 
 from seagoat import __version__
+from seagoat.query_service import (
+    remove_results_from_unavailable_files,
+    search_repo,
+)
 from seagoat.utils.cli_display import display_results
 from seagoat.utils.config import get_config_values
 from seagoat.utils.generative import enhance_results
@@ -47,41 +51,23 @@ def display_accuracy_warning(server_address):
         )
 
 
-def query_server(query, server_address, max_results, context_above, context_below):
-    response = requests.post(
-        f"{server_address}/lines/query",
-        json={
-            "queryText": query,
-            "limitClue": max_results,
-            "contextAbove": context_above,
-            "contextBelow": context_below,
-        },
-        headers={"Content-Type": "application/json"},
-    )
-
-    response_data = orjson.loads(response.text)
-
-    if "error" in response_data:
-        click.echo(response_data["error"]["message"], err=True)
+def query_server(
+    query, repo_path, server_address, max_results, context_above, context_below
+):
+    try:
+        response_data = search_repo(
+            query=query,
+            repo_path=repo_path,
+            max_results=max_results,
+            context_above=context_above,
+            context_below=context_below,
+            server_address=server_address,
+        )
+    except RuntimeError as error:
+        click.echo(str(error), err=True)
         sys.exit(ExitCode.SERVER_ERROR)
 
-    response.raise_for_status()
-
     return response_data["results"]
-
-
-def rewrite_full_paths_to_use_local_path(repo_path, results):
-    return [
-        {
-            **result,
-            "fullPath": str((Path(repo_path) / result["path"]).expanduser().resolve()),
-        }
-        for result in results
-    ]
-
-
-def remove_results_from_unavailable_files(results):
-    return [result for result in results if Path(result["fullPath"]).exists()]
 
 
 @click.command()
@@ -180,13 +166,13 @@ def seagoat(
 
         results = query_server(
             query,
+            repo_path,
             server_address,
             max_results,
             context_above if context_above is not None else 3,
             context_below if context_below is not None else 3,
         )
 
-        results = rewrite_full_paths_to_use_local_path(repo_path, results)
         results = remove_results_from_unavailable_files(results)
         if reverse or generative:
             results = reversed(results)
