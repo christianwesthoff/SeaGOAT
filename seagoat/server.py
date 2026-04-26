@@ -26,6 +26,8 @@ from seagoat.utils.server import (
 from seagoat.utils.wait import wait_for
 import orjson
 
+SERVER_THREADS = 4
+
 
 class ExitCode:
     NOT_A_GIT_REPO = 5
@@ -146,7 +148,7 @@ def start_server(repo_path: str, custom_port=None):
             "pid": os.getpid(),
         },
     )
-    serve(app, host="0.0.0.0", port=port, threads=1)
+    serve(app, host="0.0.0.0", port=port, threads=SERVER_THREADS)
 
 
 def get_server(repo_path, custom_port=None):

@@ -16,17 +16,21 @@ def query_lines(
     max_results: int | None,
     context_above: int,
     context_below: int,
+    request_timeout: float | None = None,
 ) -> dict[str, Any]:
-    response = requests.post(
-        f"{server_address}/lines/query",
-        json={
+    request_kwargs: dict[str, Any] = {
+        "json": {
             "queryText": query,
             "limitClue": max_results,
             "contextAbove": context_above,
             "contextBelow": context_below,
         },
-        headers={"Content-Type": "application/json"},
-    )
+        "headers": {"Content-Type": "application/json"},
+    }
+    if request_timeout is not None:
+        request_kwargs["timeout"] = request_timeout
+
+    response = requests.post(f"{server_address}/lines/query", **request_kwargs)
 
     response_data = orjson.loads(response.text)
 
@@ -65,6 +69,7 @@ def search_repo(
     context_above: int,
     context_below: int,
     server_address: str | None = None,
+    request_timeout: float | None = None,
 ) -> dict[str, Any]:
     normalized_repo_path = str(Path(repo_path).expanduser().resolve())
     resolved_server_address = server_address
@@ -78,6 +83,7 @@ def search_repo(
         max_results=max_results,
         context_above=context_above,
         context_below=context_below,
+        request_timeout=request_timeout,
     )
     results = rewrite_full_paths_to_use_local_path(
         normalized_repo_path, response_data["results"]

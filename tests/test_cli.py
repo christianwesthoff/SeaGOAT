@@ -1,5 +1,4 @@
 import os
-import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -11,7 +10,7 @@ import requests
 from click.testing import CliRunner
 
 from seagoat import __version__
-from seagoat.cli import cli, query_server, seagoat, warn_if_update_available
+from seagoat.cli import cli, seagoat, warn_if_update_available
 from seagoat.utils.cli_display import is_bat_installed
 from seagoat.utils.server import update_server_info
 from tests.conftest import MagicMock
@@ -497,6 +496,43 @@ def test_search_repo_uses_explicit_server_address(mocker, repo):
             "contextBelow": 4,
         },
         headers={"Content-Type": "application/json"},
+    )
+
+
+def test_search_repo_forwards_request_timeout(mocker, repo):
+    from seagoat.query_service import search_repo
+
+    mocker.patch(
+        "seagoat.query_service.get_server_info",
+        return_value={"address": "http://localhost:31337"},
+    )
+
+    mock_response = mocker.Mock()
+    mock_response.text = orjson.dumps({"results": [], "version": __version__})
+    mock_response.raise_for_status.return_value = None
+    mocked_post = mocker.patch(
+        "seagoat.query_service.requests.post", return_value=mock_response
+    )
+
+    search_repo(
+        query="Python",
+        repo_path=repo.working_dir,
+        max_results=7,
+        context_above=2,
+        context_below=4,
+        request_timeout=12,
+    )
+
+    mocked_post.assert_called_once_with(
+        "http://localhost:31337/lines/query",
+        json={
+            "queryText": "Python",
+            "limitClue": 7,
+            "contextAbove": 2,
+            "contextBelow": 4,
+        },
+        headers={"Content-Type": "application/json"},
+        timeout=12,
     )
 
 

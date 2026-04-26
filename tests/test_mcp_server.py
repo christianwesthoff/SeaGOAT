@@ -65,7 +65,23 @@ def test_run_search_tool_translates_missing_server_to_runtime_error(
         run_search_tool(query="Markdown", repo_path=str(tmp_path))
 
 
-def test_run_search_tool_forwards_default_context_values(tmp_path, mocker):
+def test_run_search_tool_translates_timeout_to_runtime_error(tmp_path, mocker):
+    mocker.patch(
+        "seagoat.mcp_tools.search.search_repo",
+        side_effect=requests.exceptions.Timeout(),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "SeaGOAT search timed out after 20 seconds for "
+            f"'{tmp_path}' while searching for 'Markdown'"
+        ),
+    ):
+        run_search_tool(query="Markdown", repo_path=str(tmp_path))
+
+
+def test_run_search_tool_forwards_mcp_default_values(tmp_path, mocker):
     mocked_search_repo = mocker.patch(
         "seagoat.mcp_tools.search.search_repo",
         return_value={
@@ -79,9 +95,10 @@ def test_run_search_tool_forwards_default_context_values(tmp_path, mocker):
     mocked_search_repo.assert_called_once_with(
         query="Markdown",
         repo_path=str(tmp_path),
-        max_results=None,
-        context_above=3,
-        context_below=3,
+        max_results=20,
+        context_above=1,
+        context_below=1,
+        request_timeout=20,
     )
     assert result["summary"] == (
         f"SeaGOAT searched '{tmp_path}' for 'Markdown' and returned 1 result."
@@ -90,6 +107,33 @@ def test_run_search_tool_forwards_default_context_values(tmp_path, mocker):
     assert result["server_address"] == "http://localhost:31337"
     assert result["result_count"] == 1
     assert result["results"] == [{"path": "file1.md"}]
+
+
+def test_run_search_tool_preserves_explicit_search_values(tmp_path, mocker):
+    mocked_search_repo = mocker.patch(
+        "seagoat.mcp_tools.search.search_repo",
+        return_value={
+            "server_address": "http://localhost:31337",
+            "results": [],
+        },
+    )
+
+    run_search_tool(
+        query="Markdown",
+        repo_path=str(tmp_path),
+        max_results=7,
+        context_above=2,
+        context_below=4,
+    )
+
+    mocked_search_repo.assert_called_once_with(
+        query="Markdown",
+        repo_path=str(tmp_path),
+        max_results=7,
+        context_above=2,
+        context_below=4,
+        request_timeout=20,
+    )
 
 
 def test_mcp_server_subcommand_imports_real_module_and_calls_main(runner, mocker):

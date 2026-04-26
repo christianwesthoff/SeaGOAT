@@ -12,7 +12,7 @@ import pytest
 import requests
 
 from seagoat import __version__
-from seagoat.server import get_status_data
+from seagoat.server import get_status_data, start_server
 from seagoat.server import server as seagoat_server
 from seagoat.utils.server import (
     get_server_info,
@@ -94,6 +94,23 @@ def test_status_endpoint_with_some_files_not_analyzed(server):
         data["stats"]["accuracy"]["percentage"]
     )
     assert 0 <= data["stats"]["accuracy"]["percentage"] < 100
+
+
+def test_start_server_uses_thread_pool_for_responsiveness(mocker):
+    app = object()
+    mocked_serve = mocker.patch("seagoat.server.serve")
+    mocker.patch("seagoat.server.is_git_repo", return_value=True)
+    mocker.patch("seagoat.server.create_app", return_value=app)
+    mocker.patch("seagoat.server.update_server_info")
+
+    start_server("/tmp/example-repo", custom_port=31337)
+
+    mocked_serve.assert_called_once_with(
+        app,
+        host="0.0.0.0",
+        port=31337,
+        threads=4,
+    )
 
 
 def test_status_1(repo, runner):
