@@ -48,6 +48,8 @@ def run_read_file_tool(
     full_path = resolve_file_path(normalized_repo_path, file_path)
     relative_path = full_path.relative_to(normalized_repo_path).as_posix()
     file_lines = read_file_with_correct_encoding(str(full_path)).splitlines()
+    if start_line > len(file_lines):
+        raise ValueError("start_line must not exceed total file lines")
 
     requested_end_line = end_line if end_line is not None else len(file_lines)
     bounded_end_line = min(requested_end_line, start_line + MAX_READ_LINES - 1)

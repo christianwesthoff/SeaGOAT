@@ -95,6 +95,13 @@ def display_performance(performance):
     click.echo(f"  serialization: {performance.get('serializationMilliseconds')} ms")
 
 
+def normalize_query_response(response_data):
+    if isinstance(response_data, list):
+        return {"results": response_data}
+
+    return response_data
+
+
 SEARCH_HELP = """
 Query your codebase for your QUERY in the Git repository REPO_PATH.
 Your query can contain keywords, regular expression patterns,
@@ -213,6 +220,7 @@ def run_search_command(
             context_below if context_below is not None else 3,
             include_performance=performance,
         )
+        response_data = normalize_query_response(response_data)
 
         results = response_data["results"]
         results = remove_results_from_unavailable_files(results)
