@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
 from seagoat.mcp_tools.search import validate_repo_path
 
 DEFAULT_MCP_GREP_MAX_RESULTS = 50
+DEFAULT_MCP_GREP_TIMEOUT_SECONDS = 10.0
 
 
 def build_grep_summary(*, pattern: str, repo_path: str, result_count: int) -> str:
@@ -54,6 +56,8 @@ def _parse_rg_json_line(line: str, repo_path: str) -> dict[str, Any] | None:
     file_path = _rg_text(path)
     if not file_path:
         return None
+    if file_path.startswith("./"):
+        file_path = file_path[2:]
 
     full_path = (Path(repo_path) / file_path).resolve()
     return {
@@ -64,7 +68,12 @@ def _parse_rg_json_line(line: str, repo_path: str) -> dict[str, Any] | None:
     }
 
 
-def _run_rg_bounded(command: list[str], repo_path: str, limit: int) -> tuple[list[str], int, str]:
+def _run_rg_bounded(
+    command: list[str],
+    repo_path: str,
+    limit: int,
+    timeout_seconds: float,
+) -> tuple[list[str], int, str, bool]:
     process = subprocess.Popen(
         command,
         cwd=repo_path,
@@ -77,6 +86,8 @@ def _run_rg_bounded(command: list[str], repo_path: str, limit: int) -> tuple[lis
 
     stdout_lines: list[str] = []
     match_count = 0
+    timed_out = False
+    start_time = time.monotonic()
     assert process.stdout is not None
     for line in process.stdout:
         stdout_lines.append(line)
@@ -86,6 +97,10 @@ def _run_rg_bounded(command: list[str], repo_path: str, limit: int) -> tuple[lis
             event = {}
         if event.get("type") == "match":
             match_count += 1
+            if time.monotonic() - start_time >= timeout_seconds:
+                timed_out = True
+                process.terminate()
+                break
         if match_count >= limit:
             process.terminate()
             break
@@ -96,7 +111,7 @@ def _run_rg_bounded(command: list[str], repo_path: str, limit: int) -> tuple[lis
         process.kill()
         _, stderr = process.communicate()
 
-    return stdout_lines, process.returncode, stderr
+    return stdout_lines, process.returncode, stderr, timed_out
 
 
 def run_grep_tool(
@@ -106,6 +121,8 @@ def run_grep_tool(
     max_results: int | None = None,
     case_sensitive: bool = False,
     regex: bool = False,
+    path_glob: str | None = None,
+    timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     normalized_pattern = pattern.strip()
     if not normalized_pattern:
@@ -117,6 +134,11 @@ def run_grep_tool(
     )
     if effective_max_results < 1:
         raise ValueError("max_results must be greater than or equal to 1")
+    effective_timeout_seconds = (
+        DEFAULT_MCP_GREP_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    )
+    if effective_timeout_seconds <= 0:
+        raise ValueError("timeout_seconds must be greater than 0")
 
     command = [
         "rg",
@@ -131,17 +153,21 @@ def run_grep_tool(
         command.append("--fixed-strings")
     if not case_sensitive:
         command.append("--ignore-case")
+    if path_glob is not None:
+        command.extend(["--glob", path_glob])
     command.append("--")
     command.append(normalized_pattern)
+    command.append(".")
 
     requested_results = effective_max_results + 1
-    stdout_lines, return_code, stderr = _run_rg_bounded(
+    stdout_lines, return_code, stderr, timed_out = _run_rg_bounded(
         command,
         normalized_repo_path,
         requested_results,
+        effective_timeout_seconds,
     )
 
-    if return_code not in (0, 1, -15):
+    if return_code not in (0, 1, -15) and not timed_out:
         message = stderr.strip() or f"ripgrep exited with status {return_code}"
         if regex:
             raise RuntimeError(f"Invalid grep regex pattern '{normalized_pattern}': {message}")
@@ -155,8 +181,7 @@ def run_grep_tool(
     truncated = len(parsed_results) > effective_max_results
     results = parsed_results[:effective_max_results]
     result_count = len(results)
-
-    return {
+    output = {
         "summary": build_grep_summary(
             pattern=normalized_pattern,
             repo_path=normalized_repo_path,
@@ -169,3 +194,10 @@ def run_grep_tool(
         "truncated": truncated,
         "results": results,
     }
+    if path_glob is not None:
+        output["path_glob"] = path_glob
+    if timeout_seconds is not None:
+        output["timeout_seconds"] = effective_timeout_seconds
+        output["timed_out"] = timed_out
+        output["partial"] = timed_out
+    return output

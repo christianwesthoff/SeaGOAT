@@ -99,6 +99,10 @@ the target repository:
 seagoat-server start /path/to/your/repo
 ```
 
+The MCP server also exposes local helper tools for faster agent workflows:
+`server_status` checks whether semantic search is ready, while `grep` supports
+path-scoped exact searches and bounded timeouts for large repositories.
+
 ### Stopping the server
 
 You can stop the running server using the following command:

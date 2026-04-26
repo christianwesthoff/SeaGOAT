@@ -300,7 +300,9 @@ async def test_mcp_stdio_lists_tools_with_required_schemas():
             tools = await session.list_tools()
 
     tools_by_name = {tool.name: tool for tool in tools.tools}
-    assert {"search", "read_file", "grep", "research"}.issubset(tools_by_name)
+    assert {"search", "read_file", "grep", "research", "server_status"}.issubset(
+        tools_by_name
+    )
     assert set(tools_by_name["search"].inputSchema["required"]) == {
         "query",
         "repo_path",
@@ -313,8 +315,13 @@ async def test_mcp_stdio_lists_tools_with_required_schemas():
         "repo_path",
         "pattern",
     }
+    assert "path_glob" in tools_by_name["grep"].inputSchema["properties"]
+    assert "timeout_seconds" in tools_by_name["grep"].inputSchema["properties"]
     assert set(tools_by_name["research"].inputSchema["required"]) == {
         "question",
+        "repo_path",
+    }
+    assert set(tools_by_name["server_status"].inputSchema["required"]) == {
         "repo_path",
     }
 

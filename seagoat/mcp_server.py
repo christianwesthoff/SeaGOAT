@@ -9,6 +9,7 @@ from seagoat.mcp_tools.grep import run_grep_tool
 from seagoat.mcp_tools.read_file import run_read_file_tool
 from seagoat.mcp_tools.research import run_research_tool
 from seagoat.mcp_tools.search import run_search_tool
+from seagoat.mcp_tools.status import run_server_status_tool
 
 mcp = FastMCP("SeaGOAT")
 
@@ -47,6 +48,10 @@ class GrepToolResult(BaseModel):
     max_results: int
     truncated: bool
     results: list[dict[str, Any]]
+    path_glob: str | None = None
+    timeout_seconds: float | None = None
+    timed_out: bool | None = None
+    partial: bool | None = None
 
 
 class ResearchToolResult(BaseModel):
@@ -56,6 +61,14 @@ class ResearchToolResult(BaseModel):
     queries: list[dict[str, Any]]
     grouped_results: list[dict[str, Any]]
     suggested_reads: list[dict[str, Any]]
+
+
+class ServerStatusToolResult(BaseModel):
+    summary: str
+    repo_path: str
+    running: bool
+    server_address: str | None
+    start_command: str
 
 
 @mcp.tool()
@@ -103,6 +116,8 @@ def grep(
     max_results: int | None = None,
     case_sensitive: bool = False,
     regex: bool = False,
+    path_glob: str | None = None,
+    timeout_seconds: float | None = None,
 ) -> GrepToolResult:
     return GrepToolResult.model_validate(
         run_grep_tool(
@@ -111,6 +126,8 @@ def grep(
             max_results=max_results,
             case_sensitive=case_sensitive,
             regex=regex,
+            path_glob=path_glob,
+            timeout_seconds=timeout_seconds,
         )
     )
 
@@ -129,6 +146,13 @@ def research(
             max_results_per_query=max_results_per_query,
             include_performance=include_performance,
         )
+    )
+
+
+@mcp.tool()
+def server_status(repo_path: str) -> ServerStatusToolResult:
+    return ServerStatusToolResult.model_validate(
+        run_server_status_tool(repo_path=repo_path)
     )
 
 
