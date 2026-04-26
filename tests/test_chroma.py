@@ -86,6 +86,41 @@ def test_keeps_user_defined_embedding_provider_on_apple_silicon(mocker):
     assert embedding_function._preferred_providers == ["CPUExecutionProvider"]
 
 
+def test_caches_chunks_in_one_chroma_upsert(repo, mocker):
+    collection = mocker.Mock()
+    chroma_client = mocker.Mock()
+    chroma_client.get_or_create_collection.return_value = collection
+    mocker.patch(
+        "seagoat.sources.chroma.chromadb.PersistentClient",
+        return_value=chroma_client,
+    )
+    repo.add_file_change_commit(
+        file_name="new_file.cpp",
+        contents="\n".join([
+            "#include <iostream>",
+            "int main() {",
+            '    std::cout << "Hello";',
+            "}",
+        ]),
+        author=repo.actors["John Doe"],
+        commit_message="Initial commit for C++ file",
+    )
+    repository = Engine(repo.working_dir).repository
+    repository.analyze_files()
+    source = chroma.initialize(repository)
+    chunks = repository.get_file("new_file.cpp").get_chunks()[:3]
+
+    source["cache_chunks"](chunks)
+
+    collection.upsert.assert_called_once()
+    assert collection.upsert.call_args.kwargs["ids"] == [
+        chunk.chunk_id for chunk in chunks
+    ]
+    assert collection.upsert.call_args.kwargs["documents"] == [
+        chunk.chunk for chunk in chunks
+    ]
+
+
 @pytest.fixture(autouse=True)
 def use_real_db(real_chromadb):
     pass
@@ -314,11 +349,11 @@ async def test_chunks_are_persisted_between_runs(repo):
     )
     seagoat1 = Engine(repo.working_dir)
     with patch.object(
-        seagoat1, "_add_to_collection", wraps=seagoat1._add_to_collection
-    ) as mock_add_to_collection:
+        seagoat1, "_add_chunks_to_collection", wraps=seagoat1._add_chunks_to_collection
+    ) as mock_add_chunks_to_collection:
         seagoat1.analyze_codebase()
         results1 = await seagoat1.query("pomodoro spaghetti")
-        assert mock_add_to_collection.call_count > 2
+        assert mock_add_chunks_to_collection.call_count >= 1
         assert results1[0].gitfile.path == "articles.txt"
         del seagoat1
 

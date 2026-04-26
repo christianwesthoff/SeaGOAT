@@ -21,9 +21,16 @@ from seagoat.result import get_best_score
 from seagoat.sources import chroma, ripgrep
 from seagoat.utils.config import get_config_values
 
+INDEXING_BATCH_SIZE = 64
+
 
 def milliseconds(seconds: float) -> float:
     return round(seconds * 1000, 3)
+
+
+def batched(items, batch_size: int):
+    for start in range(0, len(items), batch_size):
+        yield items[start : start + batch_size]
 
 
 class RepositoryData(TypedDict):
@@ -89,16 +96,32 @@ class Engine:
         for source in chain(*self._fetchers.values()):
             source["cache_chunk"](chunk)
 
+    def _add_chunks_to_collection(self, chunks):
+        for source in chain(*self._fetchers.values()):
+            if "cache_chunks" in source:
+                source["cache_chunks"](chunks)
+                continue
+            for chunk in chunks:
+                source["cache_chunk"](chunk)
+
     def process_chunk(self, chunk):
-        if chunk.chunk_id in self.cache.data["chunks_already_analyzed"]:
+        self.process_chunks([chunk])
+
+    def process_chunks(self, chunks):
+        chunks_to_process = [
+            chunk
+            for chunk in chunks
+            if chunk.chunk_id not in self.cache.data["chunks_already_analyzed"]
+        ]
+        if not chunks_to_process:
             return
 
-        self._add_to_collection(chunk)
-        self.cache.data["chunks_already_analyzed"].add(chunk.chunk_id)
+        self._add_chunks_to_collection(chunks_to_process)
+        for chunk in chunks_to_process:
+            self.cache.data["chunks_already_analyzed"].add(chunk.chunk_id)
 
-        if chunk.chunk_id in self.cache.data["chunks_not_yet_analyzed"]:
-            self.cache.data["chunks_not_yet_analyzed"].remove(chunk.chunk_id)
-
+            if chunk.chunk_id in self.cache.data["chunks_not_yet_analyzed"]:
+                self.cache.data["chunks_not_yet_analyzed"].remove(chunk.chunk_id)
         self.cache.persist()
 
     def _create_vector_embeddings(self, minimum_chunks_to_analyze=None):
@@ -116,12 +139,16 @@ class Engine:
                 len(chunks_to_process),
             )
 
-        for _ in tqdm(
-            enumerate(range(minimum_chunks_to_analyze)),
+        chunks_to_analyze = chunks_to_process[:minimum_chunks_to_analyze]
+        chunks_to_process = chunks_to_process[minimum_chunks_to_analyze:]
+
+        with tqdm(
+            total=len(chunks_to_analyze),
             desc="Analyzing source code",
-        ):
-            chunk = chunks_to_process.pop(0)
-            self.process_chunk(chunk)
+        ) as progress:
+            for batch in batched(chunks_to_analyze, INDEXING_BATCH_SIZE):
+                self.process_chunks(batch)
+                progress.update(len(batch))
 
         for source in chain(*self._fetchers.values()):
             source.get("flush_batch", lambda: None)()

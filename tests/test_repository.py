@@ -315,6 +315,35 @@ async def test_allows_limiting_how_many_files_are_automatically_analized(
     assert len(seagoat.cache.data["chunks_already_analyzed"]) == chunks_to_analyze
 
 
+def test_processes_multiple_chunks_with_one_cache_persist(repo, mocker):
+    seagoat = Engine(repo.working_dir)
+    repo.add_file_change_commit(
+        file_name="new_file.cpp",
+        contents="\n".join([
+            "#include <iostream>",
+            "int main() {",
+            '    std::cout << "Hello";',
+            "}",
+        ]),
+        author=repo.actors["John Doe"],
+        commit_message="Initial commit for C++ file",
+    )
+    seagoat.repository.analyze_files()
+    chunks = seagoat.repository.get_file("new_file.cpp").get_chunks()[:3]
+    seagoat.cache.data["chunks_not_yet_analyzed"].update(
+        chunk.chunk_id for chunk in chunks
+    )
+    persist = mocker.patch.object(seagoat.cache, "persist")
+
+    seagoat.process_chunks(chunks)
+
+    assert seagoat.cache.data["chunks_already_analyzed"] == {
+        chunk.chunk_id for chunk in chunks
+    }
+    assert not seagoat.cache.data["chunks_not_yet_analyzed"]
+    persist.assert_called_once_with()
+
+
 @pytest.mark.parametrize(
     "config,expected_extra_args",
     [

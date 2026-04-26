@@ -151,6 +151,24 @@ def initialize(repository: Repository):
         if len(batch_buffer["ids"]) >= batch_size:
             _flush_batch()
 
+    def cache_chunks(chunks):
+        chunks = list(chunks)
+        if not chunks:
+            return
+
+        chroma_collection.upsert(
+            ids=[chunk.chunk_id for chunk in chunks],
+            documents=[chunk.chunk for chunk in chunks],
+            metadatas=[
+                {
+                    "path": chunk.path,
+                    "line": chunk.codeline,
+                    "git_object_id": chunk.object_id,
+                }
+                for chunk in chunks
+            ],
+        )
+
     def cache_repo():
         # chromadb does not need any repo cache action
         pass
@@ -158,6 +176,7 @@ def initialize(repository: Repository):
     return {
         "fetch": fetch,
         "cache_chunk": cache_chunk,
+        "cache_chunks": cache_chunks,
         "cache_repo": cache_repo,
         "flush_batch": _flush_batch,
     }

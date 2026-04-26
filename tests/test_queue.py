@@ -105,9 +105,13 @@ def test_important_files_are_analyzed_first(create_task_queue, mocker, repo):
     repository.analyze_files()
     order_of_files_analyzed = []
     for call in enqueue.mock_calls:
-        path = call.args[1].path
-        if not order_of_files_analyzed or order_of_files_analyzed[-1] != path:
-            order_of_files_analyzed.append(path)
+        chunks = call.args[1]
+        if not isinstance(chunks, list):
+            chunks = [chunks]
+        for chunk in chunks:
+            path = chunk.path
+            if not order_of_files_analyzed or order_of_files_analyzed[-1] != path:
+                order_of_files_analyzed.append(path)
 
     # due to sorting by file priority, chunks of the same file should
     # be grouped together
@@ -115,3 +119,16 @@ def test_important_files_are_analyzed_first(create_task_queue, mocker, repo):
 
     # the exact order of files should also match the priority list
     assert [file.path for file, _ in repository.top_files()] == order_of_files_analyzed
+
+
+def test_background_indexing_enqueues_chunk_batches(create_task_queue, mocker, repo):
+    enqueue = mocker.patch("seagoat.queue.task_queue.TaskQueue.enqueue")
+    create_task_queue()
+    sleep(2.0)
+
+    analyze_chunk_calls = [
+        call for call in enqueue.mock_calls if call.args[0] == "analyze_chunks"
+    ]
+
+    assert analyze_chunk_calls
+    assert all(isinstance(call.args[1], list) for call in analyze_chunk_calls)

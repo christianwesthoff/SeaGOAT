@@ -6,6 +6,7 @@ import orjson
 
 from seagoat import __version__
 from seagoat.queue.base_queue import LOW_PRIORITY, MEDIUM_PRIORITY, BaseQueue
+from seagoat.engine import INDEXING_BATCH_SIZE, batched
 
 SECONDS_BETWEEN_MAINTENANCE = 10
 
@@ -76,15 +77,18 @@ class TaskQueue(BaseQueue):
                 len(remaining_chunks_to_analyze),
             )
 
-            for task_index, chunk in enumerate(remaining_chunks_to_analyze):
+            remaining_chunk_batches = list(
+                batched(remaining_chunks_to_analyze, INDEXING_BATCH_SIZE)
+            )
+            for task_index, chunks in enumerate(remaining_chunk_batches):
                 priority = MEDIUM_PRIORITY + (
                     (LOW_PRIORITY - MEDIUM_PRIORITY)
-                    / len(remaining_chunks_to_analyze)
+                    / len(remaining_chunk_batches)
                     * task_index
                 )
                 self.enqueue(
-                    "analyze_chunk",
-                    chunk,
+                    "analyze_chunks",
+                    chunks,
                     priority=priority,
                     wait_for_result=False,
                 )
@@ -92,9 +96,12 @@ class TaskQueue(BaseQueue):
             logging.info("Analyzed all chunks!")
 
     def handle_analyze_chunk(self, context, chunk):
+        self.handle_analyze_chunks(context, [chunk])
+
+    def handle_analyze_chunks(self, context, chunks):
         logging.info("Note, %s tasks left in the queue.", self._task_queue.qsize())
-        logging.info("Processing chunk %s...", chunk)
-        context["seagoat_engine"].process_chunk(chunk)
+        logging.info("Processing %s chunks...", len(chunks))
+        context["seagoat_engine"].process_chunks(chunks)
 
         if self._task_queue.qsize() == 0:
             logging.info("Analyzed all chunks!")
