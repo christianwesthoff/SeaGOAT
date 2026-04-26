@@ -12,6 +12,7 @@ from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
 from seagoat.cli import cli
+from seagoat.mcp_tools.read_file import run_read_file_tool
 from seagoat.mcp_tools.search import build_summary, run_search_tool, validate_repo_path
 from seagoat.utils.server import ServerDoesNotExist, get_server_info
 from seagoat.utils.wait import wait_for
@@ -164,6 +165,47 @@ def test_run_search_tool_forwards_include_performance(tmp_path, mocker):
     assert result["performance"] == {"totalMilliseconds": 12.3}
 
 
+def test_run_read_file_tool_returns_bounded_line_range(tmp_path):
+    file_path = tmp_path / "app" / "models" / "publishing.rb"
+    file_path.parent.mkdir(parents=True)
+    file_path.write_text("first\nsecond\nthird\nfourth\n", encoding="utf-8")
+
+    result = run_read_file_tool(
+        repo_path=str(tmp_path),
+        file_path="app/models/publishing.rb",
+        start_line=2,
+        end_line=3,
+    )
+
+    assert result == {
+        "summary": (
+            f"SeaGOAT read lines 2-3 from '{tmp_path}/app/models/publishing.rb'."
+        ),
+        "repo_path": str(tmp_path),
+        "file_path": "app/models/publishing.rb",
+        "full_path": str(file_path),
+        "start_line": 2,
+        "end_line": 3,
+        "total_lines": 4,
+        "truncated": False,
+        "lines": [
+            {"line": 2, "text": "second"},
+            {"line": 3, "text": "third"},
+        ],
+    }
+
+
+def test_run_read_file_tool_rejects_paths_outside_repo(tmp_path):
+    outside_file = tmp_path.parent / "outside.rb"
+    outside_file.write_text("secret", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="file_path must stay inside repo_path"):
+        run_read_file_tool(
+            repo_path=str(tmp_path),
+            file_path=str(outside_file),
+        )
+
+
 def test_mcp_server_subcommand_imports_real_module_and_calls_main(runner, mocker):
     mocked_main = mocker.patch("seagoat.mcp_server.main", return_value=0)
 
@@ -246,10 +288,17 @@ async def test_search_tool_over_stdio(repo):
 
                 tools = await session.list_tools()
                 search_tool = next(tool for tool in tools.tools if tool.name == "search")
+                read_file_tool = next(
+                    tool for tool in tools.tools if tool.name == "read_file"
+                )
 
                 assert set(search_tool.inputSchema["required"]) == {
                     "query",
                     "repo_path",
+                }
+                assert set(read_file_tool.inputSchema["required"]) == {
+                    "repo_path",
+                    "file_path",
                 }
 
                 result = await session.call_tool(
@@ -277,6 +326,30 @@ async def test_search_tool_over_stdio(repo):
         result_count=result.structuredContent["result_count"],
     )
     assert payload == result.structuredContent
+
+
+@pytest.mark.anyio
+async def test_read_file_tool_over_stdio(repo):
+    async with stdio_client(stdio_server_params()) as (read_stream, write_stream):
+        async with ClientSession(read_stream, write_stream) as session:
+            await session.initialize()
+
+            result = await session.call_tool(
+                "read_file",
+                {
+                    "repo_path": repo.working_dir,
+                    "file_path": "file1.md",
+                    "start_line": 1,
+                    "end_line": 2,
+                },
+            )
+
+    assert result.isError is False
+    assert result.structuredContent is not None
+    assert result.structuredContent["file_path"] == "file1.md"
+    assert result.structuredContent["start_line"] == 1
+    assert result.structuredContent["end_line"] == 2
+    assert [line["line"] for line in result.structuredContent["lines"]] == [1, 2]
 
 
 @pytest.mark.anyio

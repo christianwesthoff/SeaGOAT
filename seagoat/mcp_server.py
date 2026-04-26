@@ -5,6 +5,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 
+from seagoat.mcp_tools.read_file import run_read_file_tool
 from seagoat.mcp_tools.search import run_search_tool
 
 mcp = FastMCP("SeaGOAT")
@@ -17,6 +18,23 @@ class SearchToolResult(BaseModel):
     result_count: int
     results: list[dict[str, Any]]
     performance: dict[str, Any] | None = None
+
+
+class FileLine(BaseModel):
+    line: int
+    text: str
+
+
+class ReadFileToolResult(BaseModel):
+    summary: str
+    repo_path: str
+    file_path: str
+    full_path: str
+    start_line: int
+    end_line: int
+    total_lines: int
+    truncated: bool
+    lines: list[FileLine]
 
 
 @mcp.tool()
@@ -36,6 +54,23 @@ def search(
         context_above=context_above,
         context_below=context_below,
         include_performance=include_performance,
+        )
+    )
+
+
+@mcp.tool()
+def read_file(
+    repo_path: str,
+    file_path: str,
+    start_line: int = 1,
+    end_line: int | None = None,
+) -> ReadFileToolResult:
+    return ReadFileToolResult.model_validate(
+        run_read_file_tool(
+            repo_path=repo_path,
+            file_path=file_path,
+            start_line=start_line,
+            end_line=end_line,
         )
     )
 
