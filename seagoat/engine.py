@@ -3,6 +3,7 @@ This module allows you to use seagoat as a library
 """
 
 import asyncio
+import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -46,6 +47,10 @@ class RepositoryData(TypedDict):
 nest_asyncio.apply()
 
 
+def should_continue_by_default():
+    return True
+
+
 class Engine:
     """
     A search engine for a code repository
@@ -84,13 +89,20 @@ class Engine:
             "sync": [chroma_fetcher],
         }
 
-    def analyze_codebase(self, minimum_chunks_to_analyze=None):
+    def analyze_codebase(
+        self, minimum_chunks_to_analyze=None, should_continue=should_continue_by_default
+    ):
         self.repository.analyze_files()
 
         for fetcher in self._fetchers["async"] + self._fetchers["sync"]:
-            fetcher["cache_repo"]()
+            if not should_continue():
+                return None
+            if fetcher["cache_repo"](should_continue=should_continue) is False:
+                return None
+            if not should_continue():
+                return None
 
-        return self._create_vector_embeddings(minimum_chunks_to_analyze)
+        return self._create_vector_embeddings(minimum_chunks_to_analyze, should_continue)
 
     def _add_to_collection(self, chunk):
         for source in chain(*self._fetchers.values()):
@@ -124,10 +136,14 @@ class Engine:
                 self.cache.data["chunks_not_yet_analyzed"].remove(chunk.chunk_id)
         self.cache.persist()
 
-    def _create_vector_embeddings(self, minimum_chunks_to_analyze=None):
+    def _create_vector_embeddings(
+        self, minimum_chunks_to_analyze=None, should_continue=should_continue_by_default
+    ):
         chunks_to_process = []
 
         for file, _ in self.repository.top_files():
+            if not should_continue():
+                return None
             for chunk in file.get_chunks():
                 if chunk.chunk_id not in self.cache.data["chunks_already_analyzed"]:
                     chunks_to_process.append(chunk)
@@ -142,15 +158,19 @@ class Engine:
         chunks_to_analyze = chunks_to_process[:minimum_chunks_to_analyze]
         chunks_to_process = chunks_to_process[minimum_chunks_to_analyze:]
 
+        logging.info("Analyzing source code")
         with tqdm(
             total=len(chunks_to_analyze),
-            desc="Analyzing source code",
         ) as progress:
             for batch in batched(chunks_to_analyze, INDEXING_BATCH_SIZE):
+                if not should_continue():
+                    return None
                 self.process_chunks(batch)
                 progress.update(len(batch))
 
         for source in chain(*self._fetchers.values()):
+            if not should_continue():
+                return None
             source.get("flush_batch", lambda: None)()
 
         return chunks_to_process
@@ -177,6 +197,8 @@ class Engine:
             "formatMilliseconds": 0.0,
         }
         self._results = []
+        if not self.repository.frecency_scores:
+            self.repository.analyze_files()
 
         def timed_fetch(source):
             source_started_at = time.perf_counter()
@@ -272,8 +294,8 @@ class Engine:
             return []
 
         top_files = {
-            file.path: 0.0 - position_score
-            for file, position_score in self.repository.top_files()
+            path: 0.0 - position_score
+            for path, position_score in self.repository.frecency_scores.items()
         }
 
         normalize_score = self._get_normalization_function(scores, min_=0.0)

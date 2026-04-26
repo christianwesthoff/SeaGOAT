@@ -25,11 +25,24 @@ class BaseQueue:
         self.kwargs = kwargs
         self._task_queue = PriorityQueue()
         self._context = None
-        self._worker_thread = threading.Thread(target=self._worker_function)
-        self._worker_thread.start()
+        self._context_lock = threading.Lock()
+        self._maintenance_lock = threading.Lock()
+        worker_count = kwargs.get("worker_count", 2)
+        self._worker_threads = [
+            threading.Thread(target=self._worker_function) for _ in range(worker_count)
+        ]
+        for worker_thread in self._worker_threads:
+            worker_thread.start()
 
     def _get_context(self) -> Dict[str, Any]:
         return {}
+
+    def _get_shared_context(self) -> Dict[str, Any]:
+        if self._context is None:
+            with self._context_lock:
+                if self._context is None:
+                    self._context = self._get_context()
+        return self._context
 
     def enqueue(
         self,
@@ -59,10 +72,12 @@ class BaseQueue:
         pass
 
     def shutdown(self):
-        self._task_queue.put(
-            Task(priority=HIGH_PRIORITY, name="shutdown", args=(), kwargs={})
-        )
-        self._worker_thread.join()
+        for _ in self._worker_threads:
+            self._task_queue.put(
+                Task(priority=HIGH_PRIORITY, name="shutdown", args=(), kwargs={})
+            )
+        for worker_thread in self._worker_threads:
+            worker_thread.join()
 
     def _handle_task(self, context, task: Task):
         logging.info("Handling task: %s", task.name)
@@ -80,8 +95,7 @@ class BaseQueue:
 
     def _worker_function(self):
         logging.info("Starting worker thread...")
-        self._context = self._get_context()
-        context = self._context
+        context = self._get_shared_context()
 
         while True:
             try:
@@ -90,4 +104,9 @@ class BaseQueue:
                     break
                 self._handle_task(context, task)
             except Empty:
-                self.handle_maintenance(context)
+                if not self._maintenance_lock.acquire(blocking=False):
+                    continue
+                try:
+                    self.handle_maintenance(context)
+                finally:
+                    self._maintenance_lock.release()

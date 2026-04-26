@@ -98,19 +98,64 @@ def test_status_endpoint_with_some_files_not_analyzed(server):
 
 def test_start_server_uses_thread_pool_for_responsiveness(mocker):
     app = object()
-    mocked_serve = mocker.patch("seagoat.server.serve")
+    server = mocker.Mock()
+    mocked_create_server = mocker.patch(
+        "seagoat.server.create_server", return_value=server
+    )
     mocker.patch("seagoat.server.is_git_repo", return_value=True)
     mocker.patch("seagoat.server.create_app", return_value=app)
     mocker.patch("seagoat.server.update_server_info")
 
     start_server("/tmp/example-repo", custom_port=31337)
 
-    mocked_serve.assert_called_once_with(
+    mocked_create_server.assert_called_once_with(
         app,
         host="0.0.0.0",
         port=31337,
         threads=4,
     )
+    server.run.assert_called_once_with()
+
+
+def test_start_server_prints_when_ready_to_accept_queries(mocker, capsys):
+    app = object()
+    server = mocker.Mock()
+    mocker.patch("seagoat.server.create_server", return_value=server)
+    mocker.patch("seagoat.server.is_git_repo", return_value=True)
+    mocker.patch("seagoat.server.create_app", return_value=app)
+    mocker.patch("seagoat.server.update_server_info")
+
+    start_server("/tmp/example-repo", custom_port=31337)
+
+    captured = capsys.readouterr()
+    assert re.search(
+        r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} "
+        r"SeaGOAT server is ready to accept queries at http://localhost:31337",
+        captured.out,
+    )
+
+
+def test_start_server_prints_ready_message_before_blocking_run(mocker, capsys):
+    app = object()
+
+    def run():
+        captured = capsys.readouterr()
+        assert re.search(
+            r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} "
+            r"SeaGOAT server is ready to accept queries at http://localhost:31337",
+            captured.out,
+        )
+
+    server = mocker.Mock()
+    server.run.side_effect = run
+    mocker.patch("seagoat.server.create_server", return_value=server)
+    mocker.patch("seagoat.server.is_git_repo", return_value=True)
+    mocker.patch("seagoat.server.create_app", return_value=app)
+    mocker.patch("seagoat.server.update_server_info")
+
+    start_server("/tmp/example-repo", custom_port=31337)
+
+    server.run.assert_called_once_with()
 
 
 def test_status_1(repo, runner):
@@ -301,6 +346,28 @@ def test_query_with_include_performance_param(client, mock_queue):
     assert response.status_code == 200
 
 
+def test_query_prints_received_query_before_enqueue(client, mock_queue, capsys):
+    def enqueue(*args, **kwargs):
+        captured = capsys.readouterr()
+        assert re.search(
+            r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} "
+            r"Received query: Markdown",
+            captured.err,
+        )
+        return b'{"results": [], "version": "0.0.0-test"}'
+
+    mock_queue.enqueue.side_effect = enqueue
+
+    response = client.post(
+        "lines/query",
+        json={
+            "queryText": "Markdown",
+        },
+    )
+
+    assert response.status_code == 200
+
+
 def test_status_endpoint_reads_queue_stats_without_enqueuing(client, mock_queue):
     mock_queue.get_stats.return_value = {
         "queue": {"size": 7},
@@ -359,6 +426,20 @@ def test_version_option(runner):
 
     assert result.exit_code == 0
     assert result.output.strip() == f"seagoat, version {__version__}"
+
+
+def test_start_command_does_not_print_after_blocking_server_returns(
+    runner, mocker, repo
+):
+    mocker.patch(
+        "seagoat.server.get_config_values", return_value={"server": {"port": None}}
+    )
+    mocker.patch("seagoat.server.get_server", return_value="http://localhost:31337")
+
+    result = runner.invoke(seagoat_server, ["start", repo.working_dir])
+
+    assert result.exit_code == 0
+    assert "Server running." not in result.output
 
 
 @pytest.mark.parametrize("custom_port", [7483, 9981])

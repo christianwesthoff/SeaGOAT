@@ -4,10 +4,11 @@ import logging
 import os
 from pathlib import Path
 from collections import OrderedDict
+from datetime import datetime
 
 import click
 from flask import Flask, current_app, jsonify, request
-from waitress import serve
+from waitress.server import create_server
 
 from seagoat import __version__
 from seagoat.cache import Cache, get_cache_root
@@ -23,7 +24,6 @@ from seagoat.utils.server import (
     stop_server,
     update_server_info,
 )
-from seagoat.utils.wait import wait_for
 import orjson
 
 SERVER_THREADS = 4
@@ -31,6 +31,11 @@ SERVER_THREADS = 4
 
 class ExitCode:
     NOT_A_GIT_REPO = 5
+
+
+def timestamped_message(message: str) -> str:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
+    return f"{timestamp} {message}"
 
 
 def get_fallback_value(dictionary, key, fallback_value):
@@ -83,6 +88,7 @@ def create_app(repo_path):
         if include_performance:
             query_kwargs["include_performance"] = True
 
+        click.echo(timestamped_message(f"Received query: {query}"), err=True)
         return execute_query(**query_kwargs)
 
     @app.route("/files/query", methods=["POST"])
@@ -102,6 +108,7 @@ def create_app(repo_path):
         if include_performance:
             query_kwargs["include_performance"] = True
 
+        click.echo(timestamped_message(f"Received query: {query}"), err=True)
         result = execute_query(**query_kwargs)
         parsed_results = orjson.loads(result)
         files_dict = OrderedDict()
@@ -163,7 +170,13 @@ def start_server(repo_path: str, custom_port=None):
             "pid": os.getpid(),
         },
     )
-    serve(app, host="0.0.0.0", port=port, threads=SERVER_THREADS)
+    server = create_server(app, host="0.0.0.0", port=port, threads=SERVER_THREADS)
+    click.echo(
+        timestamped_message(
+            f"SeaGOAT server is ready to accept queries at http://localhost:{port}"
+        )
+    )
+    server.run()
 
 
 def get_server(repo_path, custom_port=None):
@@ -184,12 +197,6 @@ def get_server(repo_path, custom_port=None):
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
     start_server(str(repo_path), custom_port=port)
-
-    wait_for(lambda: get_server_info(repo_path), timeout=60)
-
-    server_info = get_server_info(repo_path)
-    click.echo(f"Server started at {server_info['address']}")
-    return server_info["address"]
 
 
 @click.group()
@@ -212,7 +219,6 @@ def start(repo_path, port):
     port = port if port is not None else config["server"]["port"]
 
     get_server(repo_path, custom_port=port)
-    click.echo("Server running.")
 
 
 def get_status_data(repo_path):

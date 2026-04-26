@@ -59,7 +59,6 @@ class TaskQueue(BaseQueue):
         if context["last_repo_state_hash"] == current_repo_state_hash:
             return
 
-        context["last_repo_state_hash"] = current_repo_state_hash
         context["last_maintenance"] = time.time()
 
         if self._task_queue.qsize() > 0:
@@ -67,9 +66,15 @@ class TaskQueue(BaseQueue):
 
         logging.info("Checking repository for new changes")
         remaining_chunks_to_analyze = context["seagoat_engine"].analyze_codebase(
-            self.kwargs["minimum_chunks_to_analyze"]
+            self.kwargs["minimum_chunks_to_analyze"],
+            should_continue=lambda: self._task_queue.qsize() == 0,
         )
 
+        if remaining_chunks_to_analyze is None:
+            logging.info("Paused repository maintenance because tasks are waiting.")
+            return
+
+        context["last_repo_state_hash"] = current_repo_state_hash
         logging.info("Analyzed the minimum number of chunks needed to operate. ")
         if remaining_chunks_to_analyze:
             logging.info(

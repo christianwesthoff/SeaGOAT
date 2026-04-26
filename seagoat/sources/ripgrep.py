@@ -48,16 +48,24 @@ class RipGrepCache(str):
             for line_number, line in enumerate(file_contents.splitlines(), start=1):
                 yield file, line_number, line
 
-    def _generate_cache_lines(self):
+    def _generate_cache_lines(self, should_continue):
         for file, line_number, line in self._iterate_lines_to_cache():
+            if not should_continue():
+                return
             yield f"{file.path}:{line_number}:{line}\n"
 
-    def _build_cache_file(self):
+    def _build_cache_file(self, should_continue):
         total_estimated_cache_size = 0
         line_count = 0
 
+        if not should_continue():
+            return False
+
         with open(self.file_path, "w", encoding="utf-8") as cache_file:
-            for formattted_cache_line in self._generate_cache_lines():
+            for formattted_cache_line in self._generate_cache_lines(should_continue):
+                if not should_continue():
+                    return False
+
                 cache_file.write(formattted_cache_line)
                 total_estimated_cache_size += len(formattted_cache_line)
                 line_count += 1
@@ -70,6 +78,9 @@ class RipGrepCache(str):
 
                     break
 
+        if not should_continue():
+            return False
+
         logging.info(
             "Estimated ripgrep cache size: %.2f megabytes (%s bytes). Line count %s",
             total_estimated_cache_size / MEGABYTE,
@@ -77,9 +88,15 @@ class RipGrepCache(str):
             line_count,
         )
         self.is_initialized = True
+        return True
 
-    def rebuild(self):
-        self._build_cache_file()
+    def rebuild(self, should_continue=lambda: True):
+        if not self._build_cache_file(should_continue):
+            return False
+
+        if not should_continue():
+            return False
+
         if platform.system() == "Windows":
             # Memory map does not work on Windows for some reason
             # Use a simple string as a fallback
@@ -88,6 +105,7 @@ class RipGrepCache(str):
         else:
             with open(self.file_path, "r+b") as cache_file:
                 self._data = mmap.mmap(cache_file.fileno(), 0)
+        return True
 
     def encode(self, *args, **kwargs):  # type: ignore
         return self._data
@@ -107,10 +125,10 @@ def initialize(repository: Repository):
         # Ripgrep does not use chunks
         pass
 
-    def cache_repo():
-        memory_cache.rebuild()
+    def cache_repo(should_continue=lambda: True):
+        return memory_cache.rebuild(should_continue=should_continue)
 
-    def _fetch(query_text: str, path: str, limit: int, cache: RipGrepCache):
+    def _fetch(query_text: str, path: str, limit: int, cache: RipGrepCache | None):
         query_text_without_stopwords = " ".join(
             query for query in query_text.split(" ") if query not in STOP_WORDS
         )
@@ -127,19 +145,21 @@ def initialize(repository: Repository):
             query_text,
         ]
 
-        try:
-            rg_output = subprocess.check_output(
-                cmd, encoding="utf-8", input=cache.as_input()
-            )
-        except subprocess.CalledProcessError as exception:
-            rg_output = exception.output
-        for line in rg_output.splitlines():
+        def add_result_line(line):
             relative_path, raw_line_number, _ = line.split(":", 2)
+            relative_path = str(Path(relative_path))
             line_number = int(raw_line_number)
-            gitfile = repository.get_file(relative_path)
 
             if not is_file_type_supported(relative_path):
-                continue
+                return
+
+            if repository._is_file_ignored(relative_path):
+                return
+
+            if relative_path not in repository.frecency_scores:
+                return
+
+            gitfile = repository.get_file(relative_path)
 
             if relative_path not in files:
                 files[relative_path] = Result(query_text, gitfile)
@@ -147,12 +167,40 @@ def initialize(repository: Repository):
             # This is so that ripgrep results are on comparable levels with chroma results
             files[relative_path].add_line(line_number, MAXIMUM_VECTOR_DISTANCE * 0.8)
 
+        if cache is None:
+            cmd.append("--line-number")
+            cmd.append("--with-filename")
+            with subprocess.Popen(
+                cmd,
+                cwd=path,
+                stdout=subprocess.PIPE,
+                text=True,
+            ) as process:
+                assert process.stdout is not None
+                for line in process.stdout:
+                    add_result_line(line)
+                    if len(files) >= limit:
+                        process.terminate()
+                        break
+                process.wait()
+            return files.values()
+
+        try:
+            rg_output = subprocess.check_output(
+                cmd, encoding="utf-8", input=cache.as_input()
+            )
+        except subprocess.CalledProcessError as exception:
+            rg_output = exception.output
+        for line in rg_output.splitlines():
+            add_result_line(line)
+
         return files.values()
 
     def fetch(query_text: str, limit: int):
         if not memory_cache.is_initialized:
-            repository.analyze_files()
-            cache_repo()
+            if not repository.frecency_scores:
+                repository.analyze_files()
+            return _fetch(query_text, str(path), limit, None)
 
         return _fetch(query_text, str(path), limit, memory_cache)
 

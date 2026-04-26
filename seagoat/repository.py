@@ -27,6 +27,8 @@ class Repository:
         self.config = get_config_values(self.path)
         self.file_changes = defaultdict(list)
         self.frecency_scores = {}
+        self.object_ids = {}
+        self.files = {}
 
     def _get_head_hash(self):
         return subprocess.check_output(
@@ -50,6 +52,9 @@ class Repository:
         Returns the git object id for the current version
         of a file
         """
+        if file_path in self.object_ids:
+            return self.object_ids[file_path]
+
         object_id = (
             subprocess.check_output(
                 [
@@ -67,6 +72,23 @@ class Repository:
         )
 
         return object_id
+
+    def _get_head_object_ids(self):
+        raw_entries = subprocess.check_output(
+            ["git", "-C", str(self.path), "ls-tree", "-r", "-z", "HEAD"],
+            text=True,
+        )
+        object_ids = {}
+
+        for raw_entry in raw_entries.split("\0"):
+            if not raw_entry:
+                continue
+
+            metadata, filename = raw_entry.split("\t", 1)
+            _, _, object_id = metadata.split(" ", 2)
+            object_ids[filename] = object_id
+
+        return object_ids
 
     def get_blob_data(self, object_id: str) -> str:
         data = subprocess.check_output(
@@ -94,6 +116,8 @@ class Repository:
         ]
 
         self.file_changes.clear()
+        self.object_ids = self._get_head_object_ids()
+        self.files.clear()
 
         files = set(
             subprocess.check_output(["rg", "--files"], cwd=self.path, text=True).split()
@@ -149,8 +173,10 @@ class Repository:
         """
         Returns a GitFile object with the current version of the file
         """
+        if filename in self.files:
+            return self.files[filename]
 
-        return GitFile(
+        file = GitFile(
             self,
             filename,
             str(self.path / filename),
@@ -158,3 +184,6 @@ class Repository:
             self.frecency_scores[filename],
             [commit[3] for commit in self.file_changes[filename]],
         )
+        self.files[filename] = file
+
+        return file

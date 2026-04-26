@@ -25,6 +25,18 @@ def test_returns_file_list_1(repo):
     }
 
 
+def test_reuses_file_objects_until_repository_is_reanalyzed(repo):
+    seagoat = Engine(repo.working_dir)
+    seagoat.repository.analyze_files()
+    first_file = seagoat.repository.get_file("file1.md")
+
+    assert seagoat.repository.get_file("file1.md") is first_file
+
+    seagoat.repository.analyze_files()
+
+    assert seagoat.repository.get_file("file1.md") is not first_file
+
+
 def test_returns_file_list_2(repo):
     seagoat = Engine(repo.working_dir)
     repo.add_file_change_commit(

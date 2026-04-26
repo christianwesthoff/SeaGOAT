@@ -1,5 +1,7 @@
+import logging
 import os
 import platform
+from collections import OrderedDict
 from pathlib import Path
 
 import chromadb
@@ -19,6 +21,7 @@ CPU_PROVIDER = "CPUExecutionProvider"
 DEFAULT_EMBEDDING_FUNCTION = "DefaultEmbeddingFunction"
 APPLE_SILICON_EMBEDDING_FUNCTION = "ONNXMiniLM_L6_V2"
 COREML_OPT_IN_ENVIRONMENT_VARIABLE = "SEAGOAT_ENABLE_COREML_EMBEDDINGS"
+MAX_QUERY_CACHE_SIZE = 32
 
 
 class CoreMLDefaultEmbeddingFunction(DefaultEmbeddingFunction):
@@ -63,9 +66,8 @@ def format_results(query_text: str, repository, chromadb_results):
         if not repository.is_up_to_date_git_object(path, git_object_id):
             continue
 
-        gitfile = repository.get_file(path)
-
         if path not in files:
+            gitfile = repository.get_file(path)
             files[path] = Result(query_text, gitfile)
         files[path].add_line(line, distance)
 
@@ -89,6 +91,7 @@ def create_embedding_function(embedding_function_config):
         and os.environ.get(COREML_OPT_IN_ENVIRONMENT_VARIABLE) == "1"
         and is_coreml_available_on_apple_silicon()
     ):
+        logging.info("Using Apple Metal/CoreML embeddings via CoreMLExecutionProvider")
         return CoreMLDefaultEmbeddingFunction()
 
     return getattr(embedding_functions, embedding_function_name)(
@@ -115,10 +118,15 @@ def initialize(repository: Repository):
 
     batch_size = config["server"]["chroma"]["batchSize"]
     batch_buffer = {"ids": [], "documents": [], "metadatas": []}
+    query_cache = OrderedDict()
+
+    def _clear_query_cache():
+        query_cache.clear()
 
     def _flush_batch():
         if not batch_buffer["ids"]:
             return
+        _clear_query_cache()
         chroma_collection.upsert(
             ids=batch_buffer["ids"],
             documents=batch_buffer["documents"],
@@ -132,11 +140,19 @@ def initialize(repository: Repository):
         # Slightly overfetch results as it will sorted using a different score later
         maximum_chunks_to_fetch = 100  # this should be plenty, especially because many times context could be included
         n_results = min((limit + 1) * 2, maximum_chunks_to_fetch)
+        cache_key = (query_text, n_results)
 
-        chromadb_results = chroma_collection.query(
-            query_texts=[query_text],
-            n_results=n_results,
-        )
+        if cache_key in query_cache:
+            chromadb_results = query_cache.pop(cache_key)
+            query_cache[cache_key] = chromadb_results
+        else:
+            chromadb_results = chroma_collection.query(
+                query_texts=[query_text],
+                n_results=n_results,
+            )
+            query_cache[cache_key] = chromadb_results
+            if len(query_cache) > MAX_QUERY_CACHE_SIZE:
+                query_cache.popitem(last=False)
 
         return format_results(query_text, repository, chromadb_results)
 
@@ -156,6 +172,7 @@ def initialize(repository: Repository):
         if not chunks:
             return
 
+        _clear_query_cache()
         chroma_collection.upsert(
             ids=[chunk.chunk_id for chunk in chunks],
             documents=[chunk.chunk for chunk in chunks],
@@ -169,9 +186,9 @@ def initialize(repository: Repository):
             ],
         )
 
-    def cache_repo():
+    def cache_repo(should_continue=None):
         # chromadb does not need any repo cache action
-        pass
+        return True
 
     return {
         "fetch": fetch,

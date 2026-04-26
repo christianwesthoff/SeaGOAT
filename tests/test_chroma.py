@@ -1,4 +1,5 @@
 import copy
+import logging
 from pathlib import Path
 from unittest.mock import patch
 
@@ -33,6 +34,28 @@ def test_uses_coreml_embedding_provider_on_apple_silicon_when_enabled(mocker):
     )
 
     assert isinstance(embedding_function, chroma.CoreMLDefaultEmbeddingFunction)
+
+
+def test_logs_when_using_coreml_embedding_provider_on_apple_silicon(
+    mocker, caplog
+):
+    mocker.patch.dict("os.environ", {"SEAGOAT_ENABLE_COREML_EMBEDDINGS": "1"})
+    mocker.patch("seagoat.sources.chroma.platform.system", return_value="Darwin")
+    mocker.patch("seagoat.sources.chroma.platform.machine", return_value="arm64")
+    mocker.patch(
+        "seagoat.sources.chroma.onnxruntime.get_available_providers",
+        return_value=["CoreMLExecutionProvider", "CPUExecutionProvider"],
+    )
+
+    with caplog.at_level(logging.INFO):
+        chroma.create_embedding_function(
+            {"name": "DefaultEmbeddingFunction", "arguments": {}}
+        )
+
+    assert (
+        "Using Apple Metal/CoreML embeddings via CoreMLExecutionProvider"
+        in caplog.text
+    )
 
 
 def test_keeps_default_embedding_provider_on_apple_silicon_by_default(mocker):
@@ -119,6 +142,111 @@ def test_caches_chunks_in_one_chroma_upsert(repo, mocker):
     assert collection.upsert.call_args.kwargs["documents"] == [
         chunk.chunk for chunk in chunks
     ]
+
+
+def test_chroma_fetch_reuses_file_for_multiple_chunks_in_same_file(repo, mocker):
+    collection = mocker.Mock()
+    collection.query.return_value = {
+        "metadatas": [[
+            {
+                "path": "new_file.cpp",
+                "line": 1,
+                "git_object_id": "object-id",
+            },
+            {
+                "path": "new_file.cpp",
+                "line": 2,
+                "git_object_id": "object-id",
+            },
+        ]],
+        "distances": [[0.1, 0.2]],
+    }
+    chroma_client = mocker.Mock()
+    chroma_client.get_or_create_collection.return_value = collection
+    mocker.patch(
+        "seagoat.sources.chroma.chromadb.PersistentClient",
+        return_value=chroma_client,
+    )
+    repo.add_file_change_commit(
+        file_name="new_file.cpp",
+        contents="one\ntwo",
+        author=repo.actors["John Doe"],
+        commit_message="Initial commit for C++ file",
+    )
+    repository = Engine(repo.working_dir).repository
+    repository.analyze_files()
+    gitfile = repository.get_file("new_file.cpp")
+    mocker.patch.object(repository, "is_up_to_date_git_object", return_value=True)
+    mocked_get_file = mocker.patch.object(repository, "get_file", return_value=gitfile)
+    source = chroma.initialize(repository)
+
+    results = list(source["fetch"]("new", 10))
+
+    assert len(results) == 1
+    assert set(results[0].lines) == {1, 2}
+    mocked_get_file.assert_called_once_with("new_file.cpp")
+
+
+def test_chroma_fetch_caches_identical_queries(repo, mocker):
+    collection = mocker.Mock()
+    collection.query.return_value = {
+        "metadatas": [[
+            {
+                "path": "new_file.cpp",
+                "line": 1,
+                "git_object_id": "object-id",
+            },
+        ]],
+        "distances": [[0.1]],
+    }
+    chroma_client = mocker.Mock()
+    chroma_client.get_or_create_collection.return_value = collection
+    mocker.patch(
+        "seagoat.sources.chroma.chromadb.PersistentClient",
+        return_value=chroma_client,
+    )
+    repo.add_file_change_commit(
+        file_name="new_file.cpp",
+        contents="hello",
+        author=repo.actors["John Doe"],
+        commit_message="Initial commit for C++ file",
+    )
+    repository = Engine(repo.working_dir).repository
+    repository.analyze_files()
+    mocker.patch.object(repository, "is_up_to_date_git_object", return_value=True)
+    source = chroma.initialize(repository)
+
+    list(source["fetch"]("new", 10))
+    list(source["fetch"]("new", 10))
+
+    collection.query.assert_called_once_with(query_texts=["new"], n_results=22)
+
+
+def test_chroma_query_cache_is_cleared_when_chunks_are_cached(repo, mocker):
+    collection = mocker.Mock()
+    collection.query.return_value = {"metadatas": [[]], "distances": [[]]}
+    chroma_client = mocker.Mock()
+    chroma_client.get_or_create_collection.return_value = collection
+    mocker.patch(
+        "seagoat.sources.chroma.chromadb.PersistentClient",
+        return_value=chroma_client,
+    )
+    repo.add_file_change_commit(
+        file_name="new_file.cpp",
+        contents="hello",
+        author=repo.actors["John Doe"],
+        commit_message="Initial commit for C++ file",
+    )
+    repository = Engine(repo.working_dir).repository
+    repository.analyze_files()
+    source = chroma.initialize(repository)
+    chunk = repository.get_file("new_file.cpp").get_chunks()[0]
+
+    list(source["fetch"]("new", 10))
+    source["cache_chunks"]([chunk])
+    list(source["fetch"]("new", 10))
+
+    assert collection.query.call_count == 2
 
 
 @pytest.fixture(autouse=True)

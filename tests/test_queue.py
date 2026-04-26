@@ -1,19 +1,28 @@
-from time import sleep
+from time import perf_counter, sleep
 from unittest.mock import Mock
+import threading
 
 import orjson
 import pytest
 
+from seagoat.queue.base_queue import BaseQueue
 from seagoat.queue.task_queue import TaskQueue
 from seagoat.repository import Repository
 
 
 @pytest.fixture(name="create_task_queue")
 def create_task_queue(repo):
-    def _create_task_queue():
-        return TaskQueue(repo_path=repo.working_dir, minimum_chunks_to_analyze=0)
+    created_queues = []
 
-    return _create_task_queue
+    def _create_task_queue():
+        task_queue = TaskQueue(repo_path=repo.working_dir, minimum_chunks_to_analyze=0)
+        created_queues.append(task_queue)
+        return task_queue
+
+    yield _create_task_queue
+
+    for task_queue in created_queues:
+        task_queue.shutdown()
 
 
 @pytest.mark.parametrize(
@@ -95,6 +104,49 @@ def test_handle_query_includes_performance_when_requested():
         context_below=1,
         include_performance=True,
     )
+
+
+def test_query_can_run_while_another_worker_handles_maintenance():
+    maintenance_started = threading.Event()
+    release_maintenance = threading.Event()
+
+    class QueueWithBlockingMaintenance(BaseQueue):
+        def handle_maintenance(self, context):
+            maintenance_started.set()
+            release_maintenance.wait(timeout=5.0)
+
+        def handle_query(self, context):
+            return "query-result"
+
+    task_queue = QueueWithBlockingMaintenance(worker_count=2)
+    try:
+        assert maintenance_started.wait(timeout=5.0)
+        started_at = perf_counter()
+        assert task_queue.enqueue("query") == "query-result"
+        assert perf_counter() - started_at < 1.0
+    finally:
+        release_maintenance.set()
+        task_queue.shutdown()
+
+
+def test_maintenance_does_not_mark_repo_analyzed_when_interrupted():
+    task_queue = TaskQueue.__new__(TaskQueue)
+    task_queue.kwargs = {"minimum_chunks_to_analyze": 0}
+    task_queue._task_queue = Mock()
+    task_queue._task_queue.qsize.return_value = 0
+    engine = Mock()
+    engine.repository.get_status_hash.return_value = "repo-hash"
+    engine.analyze_codebase.return_value = None
+    context = {
+        "seagoat_engine": engine,
+        "last_maintenance": None,
+        "last_repo_state_hash": None,
+    }
+
+    task_queue.handle_maintenance(context)
+
+    engine.analyze_codebase.assert_called_once()
+    assert context["last_repo_state_hash"] is None
 
 
 def test_important_files_are_analyzed_first(create_task_queue, mocker, repo):

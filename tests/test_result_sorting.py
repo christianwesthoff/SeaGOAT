@@ -1,3 +1,7 @@
+from seagoat.engine import Engine
+from seagoat.result import Result
+
+
 def test_sort_results_test1(create_prepared_seagoat):
     ripgrep_lines = {
         "file1.md": [(1, 10.0), (2, 4.0)],
@@ -64,6 +68,35 @@ def test_no_lines(create_prepared_seagoat):
     results = seagoat.query_sync(my_query)
 
     assert results == []
+
+
+def test_format_results_does_not_materialize_every_top_file(repo, mocker):
+    repo.add_file_change_commit(
+        file_name="needle.md",
+        contents="needle",
+        author=repo.actors["John Doe"],
+        commit_message="Add needle.md",
+    )
+    repo.add_file_change_commit(
+        file_name="other.md",
+        contents="other",
+        author=repo.actors["John Doe"],
+        commit_message="Add other.md",
+    )
+    seagoat = Engine(repo.working_dir)
+    seagoat.repository.analyze_files()
+    result = Result("needle", seagoat.repository.get_file("needle.md"))
+    result.add_line(line=1, vector_distance=1.0)
+    seagoat._results = [result]
+    mocker.patch.object(
+        seagoat.repository,
+        "top_files",
+        side_effect=AssertionError("formatting should not materialize top files"),
+    )
+
+    results = seagoat._format_results("needle", hard_count_limit=3)
+
+    assert [result.gitfile.path for result in results] == ["needle.md"]
 
 
 def test_file_edits_influence_order(create_prepared_seagoat, repo):
