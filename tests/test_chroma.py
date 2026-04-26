@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from seagoat.engine import Engine
+from seagoat.sources import chroma
 
 
 def normalize_full_paths(data, repo):
@@ -16,6 +17,73 @@ def normalize_full_paths(data, repo):
     )
 
     return deep_copy_of_data
+
+
+def test_uses_coreml_embedding_provider_on_apple_silicon_when_enabled(mocker):
+    mocker.patch.dict("os.environ", {"SEAGOAT_ENABLE_COREML_EMBEDDINGS": "1"})
+    mocker.patch("seagoat.sources.chroma.platform.system", return_value="Darwin")
+    mocker.patch("seagoat.sources.chroma.platform.machine", return_value="arm64")
+    mocker.patch(
+        "seagoat.sources.chroma.onnxruntime.get_available_providers",
+        return_value=["CoreMLExecutionProvider", "CPUExecutionProvider"],
+    )
+
+    embedding_function = chroma.create_embedding_function(
+        {"name": "DefaultEmbeddingFunction", "arguments": {}}
+    )
+
+    assert isinstance(embedding_function, chroma.CoreMLDefaultEmbeddingFunction)
+
+
+def test_keeps_default_embedding_provider_on_apple_silicon_by_default(mocker):
+    mocker.patch.dict("os.environ", {}, clear=True)
+    mocker.patch("seagoat.sources.chroma.platform.system", return_value="Darwin")
+    mocker.patch("seagoat.sources.chroma.platform.machine", return_value="arm64")
+    mocker.patch(
+        "seagoat.sources.chroma.onnxruntime.get_available_providers",
+        return_value=["CoreMLExecutionProvider", "CPUExecutionProvider"],
+    )
+
+    embedding_function = chroma.create_embedding_function(
+        {"name": "DefaultEmbeddingFunction", "arguments": {}}
+    )
+
+    assert type(embedding_function).__name__ == "DefaultEmbeddingFunction"
+
+
+def test_keeps_default_embedding_provider_when_coreml_is_unavailable(mocker):
+    mocker.patch.dict("os.environ", {"SEAGOAT_ENABLE_COREML_EMBEDDINGS": "1"})
+    mocker.patch("seagoat.sources.chroma.platform.system", return_value="Darwin")
+    mocker.patch("seagoat.sources.chroma.platform.machine", return_value="arm64")
+    mocker.patch(
+        "seagoat.sources.chroma.onnxruntime.get_available_providers",
+        return_value=["CPUExecutionProvider"],
+    )
+
+    embedding_function = chroma.create_embedding_function(
+        {"name": "DefaultEmbeddingFunction", "arguments": {}}
+    )
+
+    assert type(embedding_function).__name__ == "DefaultEmbeddingFunction"
+
+
+def test_keeps_user_defined_embedding_provider_on_apple_silicon(mocker):
+    mocker.patch("seagoat.sources.chroma.platform.system", return_value="Darwin")
+    mocker.patch("seagoat.sources.chroma.platform.machine", return_value="arm64")
+    mocker.patch(
+        "seagoat.sources.chroma.onnxruntime.get_available_providers",
+        return_value=["CoreMLExecutionProvider", "CPUExecutionProvider"],
+    )
+
+    embedding_function = chroma.create_embedding_function(
+        {
+            "name": "ONNXMiniLM_L6_V2",
+            "arguments": {"preferred_providers": ["CPUExecutionProvider"]},
+        }
+    )
+
+    assert type(embedding_function).__name__ == "ONNXMiniLM_L6_V2"
+    assert embedding_function._preferred_providers == ["CPUExecutionProvider"]
 
 
 @pytest.fixture(autouse=True)

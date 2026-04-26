@@ -55,7 +55,7 @@ files ignored by `.gitignore` are already ignored. You probably should not
 need to configure this value. It is only useful if there are some files that
 you wish to keep in git, but you wish to hide from SeaGOAT.
 [Learn more about globs](https://en.wikipedia.org/wiki/Glob_(programming))
-* `chroma`: Configurations for the ChromaDB based features.
+  * `chroma`: Configurations for the ChromaDB based features.
   Has the following attributes:
   * `embeddingFunction`:
     * `name`: Name of the embedding function to use.
@@ -72,6 +72,12 @@ you wish to keep in git, but you wish to hide from SeaGOAT.
             arguments:
               preferred_providers: ["TensorrtExecutionProvider"]
         ```
+
+      * On Apple silicon, SeaGOAT can try Chroma's ONNX MiniLM embedding model
+        with the CoreML execution provider by setting
+        `SEAGOAT_ENABLE_COREML_EMBEDDINGS=1`. SeaGOAT only uses this path when
+        CoreML is available; otherwise it falls back to Chroma's default
+        embedding function.
 
 ### Client
 

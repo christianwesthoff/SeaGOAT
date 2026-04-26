@@ -1,8 +1,10 @@
+import os
 import platform
 from pathlib import Path
 
 import chromadb
 import onnxruntime
+from chromadb.api.types import DefaultEmbeddingFunction
 from chromadb.config import Settings
 from chromadb.utils import embedding_functions
 
@@ -16,6 +18,17 @@ COREML_PROVIDER = "CoreMLExecutionProvider"
 CPU_PROVIDER = "CPUExecutionProvider"
 DEFAULT_EMBEDDING_FUNCTION = "DefaultEmbeddingFunction"
 APPLE_SILICON_EMBEDDING_FUNCTION = "ONNXMiniLM_L6_V2"
+COREML_OPT_IN_ENVIRONMENT_VARIABLE = "SEAGOAT_ENABLE_COREML_EMBEDDINGS"
+
+
+class CoreMLDefaultEmbeddingFunction(DefaultEmbeddingFunction):
+    def __call__(self, input):
+        embedding_function = getattr(
+            embedding_functions, APPLE_SILICON_EMBEDDING_FUNCTION
+        )
+        return embedding_function(
+            preferred_providers=[COREML_PROVIDER, CPU_PROVIDER]
+        )(input)
 
 
 def get_metadata_and_distance_from_chromadb_result(chromadb_results):
@@ -66,20 +79,21 @@ def is_coreml_available_on_apple_silicon():
     return COREML_PROVIDER in onnxruntime.get_available_providers()
 
 
-def resolve_embedding_function_config(embedding_function_config):
+def create_embedding_function(embedding_function_config):
     embedding_function_name = embedding_function_config["name"]
     embedding_function_kwargs = embedding_function_config["arguments"]
 
     if (
         embedding_function_name == DEFAULT_EMBEDDING_FUNCTION
         and not embedding_function_kwargs
+        and os.environ.get(COREML_OPT_IN_ENVIRONMENT_VARIABLE) == "1"
         and is_coreml_available_on_apple_silicon()
     ):
-        return APPLE_SILICON_EMBEDDING_FUNCTION, {
-            "preferred_providers": [COREML_PROVIDER, CPU_PROVIDER]
-        }
+        return CoreMLDefaultEmbeddingFunction()
 
-    return embedding_function_name, embedding_function_kwargs
+    return getattr(embedding_functions, embedding_function_name)(
+        **embedding_function_kwargs
+    )
 
 
 def initialize(repository: Repository):
@@ -92,11 +106,8 @@ def initialize(repository: Repository):
             anonymized_telemetry=False,
         ),
     )
-    embedding_function_name, embedding_function_kwargs = resolve_embedding_function_config(
+    embedding_function = create_embedding_function(
         config["server"]["chroma"]["embeddingFunction"]
-    )
-    embedding_function = getattr(embedding_functions, embedding_function_name)(
-        **embedding_function_kwargs
     )
     chroma_collection = chroma_client.get_or_create_collection(
         name="code_data", embedding_function=embedding_function
