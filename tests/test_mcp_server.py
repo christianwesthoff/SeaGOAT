@@ -136,6 +136,34 @@ def test_run_search_tool_preserves_explicit_search_values(tmp_path, mocker):
     )
 
 
+def test_run_search_tool_forwards_include_performance(tmp_path, mocker):
+    mocked_search_repo = mocker.patch(
+        "seagoat.mcp_tools.search.search_repo",
+        return_value={
+            "server_address": "http://localhost:31337",
+            "results": [],
+            "performance": {"totalMilliseconds": 12.3},
+        },
+    )
+
+    result = run_search_tool(
+        query="Markdown",
+        repo_path=str(tmp_path),
+        include_performance=True,
+    )
+
+    mocked_search_repo.assert_called_once_with(
+        query="Markdown",
+        repo_path=str(tmp_path),
+        max_results=20,
+        context_above=1,
+        context_below=1,
+        request_timeout=20,
+        include_performance=True,
+    )
+    assert result["performance"] == {"totalMilliseconds": 12.3}
+
+
 def test_mcp_server_subcommand_imports_real_module_and_calls_main(runner, mocker):
     mocked_main = mocker.patch("seagoat.mcp_server.main", return_value=0)
 

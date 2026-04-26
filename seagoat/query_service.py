@@ -17,14 +17,19 @@ def query_lines(
     context_above: int,
     context_below: int,
     request_timeout: float | None = None,
+    include_performance: bool = False,
 ) -> dict[str, Any]:
+    payload = {
+        "queryText": query,
+        "limitClue": max_results,
+        "contextAbove": context_above,
+        "contextBelow": context_below,
+    }
+    if include_performance:
+        payload["includePerformance"] = True
+
     request_kwargs: dict[str, Any] = {
-        "json": {
-            "queryText": query,
-            "limitClue": max_results,
-            "contextAbove": context_above,
-            "contextBelow": context_below,
-        },
+        "json": payload,
         "headers": {"Content-Type": "application/json"},
     }
     if request_timeout is not None:
@@ -70,6 +75,7 @@ def search_repo(
     context_below: int,
     server_address: str | None = None,
     request_timeout: float | None = None,
+    include_performance: bool = False,
 ) -> dict[str, Any]:
     normalized_repo_path = str(Path(repo_path).expanduser().resolve())
     resolved_server_address = server_address
@@ -84,13 +90,17 @@ def search_repo(
         context_above=context_above,
         context_below=context_below,
         request_timeout=request_timeout,
+        include_performance=include_performance,
     )
     results = rewrite_full_paths_to_use_local_path(
         normalized_repo_path, response_data["results"]
     )
-    return {
+    result = {
         "repo_path": normalized_repo_path,
         "server_address": resolved_server_address,
         "results": results,
         "version": response_data.get("version"),
     }
+    if "performance" in response_data:
+        result["performance"] = response_data["performance"]
+    return result

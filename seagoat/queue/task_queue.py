@@ -100,20 +100,52 @@ class TaskQueue(BaseQueue):
             logging.info("Analyzed all chunks!")
 
     def handle_query(self, context, **kwargs):
-        results = context["seagoat_engine"].query_sync(
-            kwargs["query"],
-            limit_clue=kwargs["limit_clue"],
-            context_above=int(kwargs["context_above"]),
-            context_below=int(kwargs["context_below"]),
-        )
-        formatted_results = [result.to_json() for result in results]
+        include_performance = bool(kwargs.get("include_performance"))
+        queue_wait_seconds = float(kwargs.get("__queue_wait_seconds", 0.0))
+        query_kwargs = {
+            "limit_clue": kwargs["limit_clue"],
+            "context_above": int(kwargs["context_above"]),
+            "context_below": int(kwargs["context_below"]),
+        }
+        if include_performance:
+            query_kwargs["include_performance"] = True
 
-        serialized_results = orjson.dumps(
-            {
-                "results": formatted_results,
-                "version": __version__,
-            }
+        query_result = context["seagoat_engine"].query_sync(
+            kwargs["query"],
+            **query_kwargs,
         )
+        engine_performance = None
+        if include_performance:
+            results, engine_performance = query_result
+        else:
+            results = query_result
+
+        serialization_started_at = time.perf_counter()
+        formatted_results = [result.to_json() for result in results]
+        serialization_milliseconds = round(
+            (time.perf_counter() - serialization_started_at) * 1000,
+            3,
+        )
+
+        response_data = {
+            "results": formatted_results,
+            "version": __version__,
+        }
+        if include_performance:
+            queue_wait_milliseconds = round(queue_wait_seconds * 1000, 3)
+            response_data["performance"] = {
+                "queueWaitMilliseconds": queue_wait_milliseconds,
+                "serializationMilliseconds": serialization_milliseconds,
+                "totalMilliseconds": round(
+                    queue_wait_milliseconds
+                    + serialization_milliseconds
+                    + engine_performance["totalMilliseconds"],
+                    3,
+                ),
+                "engine": engine_performance,
+            }
+
+        serialized_results = orjson.dumps(response_data)
 
         return serialized_results
 

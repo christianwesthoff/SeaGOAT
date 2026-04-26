@@ -71,23 +71,38 @@ def create_app(repo_path):
         limit_clue = int(get_fallback_value(data, "limitClue", "500"))
         context_above = int(get_fallback_value(data, "contextAbove", 3))
         context_below = int(get_fallback_value(data, "contextBelow", 3))
+        include_performance = get_fallback_value(
+            data, "includePerformance", False
+        ) is True
+        query_kwargs = {
+            "query": query,
+            "context_above": context_above,
+            "context_below": context_below,
+            "limit_clue": limit_clue,
+        }
+        if include_performance:
+            query_kwargs["include_performance"] = True
 
-        return execute_query(
-            query=query,
-            context_above=context_above,
-            context_below=context_below,
-            limit_clue=limit_clue,
-        )
+        return execute_query(**query_kwargs)
 
     @app.route("/files/query", methods=["POST"])
     def query_files():
         data = request.json
         query = get_fallback_value(data, "queryText", "")
         limit_clue = int(get_fallback_value(data, "limitClue", "500"))
+        include_performance = get_fallback_value(
+            data, "includePerformance", False
+        ) is True
+        query_kwargs = {
+            "query": query,
+            "context_above": 0,
+            "context_below": 0,
+            "limit_clue": limit_clue,
+        }
+        if include_performance:
+            query_kwargs["include_performance"] = True
 
-        result = execute_query(
-            query=query, context_above=0, context_below=0, limit_clue=limit_clue
-        )
+        result = execute_query(**query_kwargs)
         parsed_results = orjson.loads(result)
         files_dict = OrderedDict()
 

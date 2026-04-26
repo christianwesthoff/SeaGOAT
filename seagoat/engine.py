@@ -3,6 +3,7 @@ This module allows you to use seagoat as a library
 """
 
 import asyncio
+import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from itertools import chain
@@ -19,6 +20,10 @@ from seagoat.repository import Repository
 from seagoat.result import get_best_score
 from seagoat.sources import chroma, ripgrep
 from seagoat.utils.config import get_config_values
+
+
+def milliseconds(seconds: float) -> float:
+    return round(seconds * 1000, 3)
 
 
 class RepositoryData(TypedDict):
@@ -62,13 +67,14 @@ class Engine:
         self.repository = Repository(path)
         self.config = get_config_values(Path(path))
 
+        ripgrep_fetcher = ripgrep.initialize(self.repository)
+        ripgrep_fetcher.setdefault("name", "ripgrep")
+        chroma_fetcher = chroma.initialize(self.repository)
+        chroma_fetcher.setdefault("name", "chroma")
+
         self._fetchers = {
-            "async": [
-                ripgrep.initialize(self.repository),
-            ],
-            "sync": [
-                chroma.initialize(self.repository),
-            ],
+            "async": [ripgrep_fetcher],
+            "sync": [chroma_fetcher],
         }
 
     def analyze_codebase(self, minimum_chunks_to_analyze=None):
@@ -122,7 +128,14 @@ class Engine:
 
         return chunks_to_process
 
-    async def query(self, query: str, limit_clue=50, context_above=0, context_below=0):
+    async def query(
+        self,
+        query: str,
+        limit_clue=50,
+        context_above=0,
+        context_below=0,
+        include_performance=False,
+    ):
         """
         limit_clue: a clue regarding how many results will be processed in the end
 
@@ -130,29 +143,63 @@ class Engine:
         direct effect on the number of results returned, but sources can use it as
         a rule of thumb.
         """
-
+        query_started_at = time.perf_counter()
+        performance = {
+            "sources": {},
+            "contextMilliseconds": 0.0,
+            "formatMilliseconds": 0.0,
+        }
         self._results = []
+
+        def timed_fetch(source):
+            source_started_at = time.perf_counter()
+            source_results = list(source["fetch"](query, limit_clue))
+            return (
+                source["name"],
+                source_results,
+                milliseconds(time.perf_counter() - source_started_at),
+            )
+
         executor = ThreadPoolExecutor(max_workers=1)
         loop = asyncio.get_event_loop()
         async_tasks = [
             loop.run_in_executor(
                 executor,
-                partial(source["fetch"], query, limit_clue),
+                partial(timed_fetch, source),
             )
             for source in self._fetchers["async"]
         ]
 
         for source in self._fetchers["sync"]:
-            self._results.extend(source["fetch"](query, limit_clue))
+            source_name, source_results, elapsed = timed_fetch(source)
+            performance["sources"][source_name] = elapsed
+            self._results.extend(source_results)
 
         results = await asyncio.gather(*async_tasks)
 
-        for result in results:
-            self._results.extend(result)
+        for source_name, source_results, elapsed in results:
+            performance["sources"][source_name] = elapsed
+            self._results.extend(source_results)
 
+        context_started_at = time.perf_counter()
         self._include_context_lines(context_above, context_below)
+        performance["contextMilliseconds"] = milliseconds(
+            time.perf_counter() - context_started_at
+        )
 
-        return self._format_results(query, limit_clue)
+        format_started_at = time.perf_counter()
+        formatted_results = self._format_results(query, limit_clue)
+        performance["formatMilliseconds"] = milliseconds(
+            time.perf_counter() - format_started_at
+        )
+        performance["totalMilliseconds"] = milliseconds(
+            time.perf_counter() - query_started_at
+        )
+
+        if include_performance:
+            return formatted_results, performance
+
+        return formatted_results
 
     def _include_context_lines(self, context_above: int, context_below: int):
         for result in self._results:

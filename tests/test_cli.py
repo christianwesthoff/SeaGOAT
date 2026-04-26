@@ -320,6 +320,61 @@ def test_forwards_limit_clue_to_server(max_length, get_request_args_from_cli_cal
     assert request_args["json"]["limitClue"] == max_length
 
 
+@pytest.mark.usefixtures("mock_accuracy_warning")
+def test_forwards_performance_to_server(get_request_args_from_cli_call):
+    request_args = get_request_args_from_cli_call(["--performance"])
+
+    assert request_args["json"]["includePerformance"] is True
+
+
+@pytest.mark.usefixtures("mock_accuracy_warning")
+def test_displays_performance_when_requested(
+    mock_server_factory, mocker, repo, runner
+):
+    mock_server_factory(
+        [["hello.txt", ["foo"]]],
+        manually_mock_request=True,
+    )
+    mocker.patch(
+        "seagoat.query_service.get_server_info",
+        return_value={"address": "http://localhost:31337"},
+    )
+    mock_response = mocker.Mock()
+    mock_response.text = orjson.dumps(
+        {
+            "results": [],
+            "version": __version__,
+            "performance": {
+                "queueWaitMilliseconds": 1.2,
+                "serializationMilliseconds": 3.4,
+                "totalMilliseconds": 56.7,
+                "engine": {
+                    "totalMilliseconds": 52.1,
+                    "sources": {
+                        "chroma": 40.0,
+                        "ripgrep": 10.0,
+                    },
+                    "contextMilliseconds": 1.0,
+                    "formatMilliseconds": 1.1,
+                },
+            },
+        }
+    )
+    mock_response.raise_for_status.return_value = None
+    mocker.patch("seagoat.query_service.requests.post", return_value=mock_response)
+
+    result = runner.invoke(
+        seagoat,
+        ["JavaScript", repo.working_dir, "--no-color", "--performance"],
+    )
+
+    assert result.exit_code == 0
+    assert "Performance:" in result.output
+    assert "total: 56.7 ms" in result.output
+    assert "chroma: 40.0 ms" in result.output
+    assert "ripgrep: 10.0 ms" in result.output
+
+
 @pytest.mark.usefixtures("server", "mock_accuracy_warning")
 def test_integration_test_without_color(snapshot, repo, mocker, runner, temporary_cd):
     mocker.patch("os.isatty", return_value=True)
@@ -536,6 +591,50 @@ def test_search_repo_forwards_request_timeout(mocker, repo):
     )
 
 
+def test_search_repo_forwards_include_performance(mocker, repo):
+    from seagoat.query_service import search_repo
+
+    mocker.patch(
+        "seagoat.query_service.get_server_info",
+        return_value={"address": "http://localhost:31337"},
+    )
+
+    mock_response = mocker.Mock()
+    mock_response.text = orjson.dumps(
+        {
+            "results": [],
+            "version": __version__,
+            "performance": {"totalMilliseconds": 12.3},
+        }
+    )
+    mock_response.raise_for_status.return_value = None
+    mocked_post = mocker.patch(
+        "seagoat.query_service.requests.post", return_value=mock_response
+    )
+
+    result = search_repo(
+        query="Python",
+        repo_path=repo.working_dir,
+        max_results=7,
+        context_above=2,
+        context_below=4,
+        include_performance=True,
+    )
+
+    assert result["performance"] == {"totalMilliseconds": 12.3}
+    mocked_post.assert_called_once_with(
+        "http://localhost:31337/lines/query",
+        json={
+            "queryText": "Python",
+            "limitClue": 7,
+            "contextAbove": 2,
+            "contextBelow": 4,
+            "includePerformance": True,
+        },
+        headers={"Content-Type": "application/json"},
+    )
+
+
 def test_search_repo_accepts_payload_without_version(mocker, repo):
     from seagoat.query_service import search_repo
 
@@ -622,6 +721,7 @@ def test_seagoat_query_invocation_still_works(runner, mocker, repo):
         None,
         None,
         None,
+        False,
         False,
         False,
         False,
@@ -924,6 +1024,19 @@ def test_warn_if_update_available_shows_warning(
 def test_warn_if_update_available_no_warning(mocker, capsys, mock_response):
     same_version = __version__
     mock_version_response = {"info": {"version": same_version}}
+
+    mocker.patch("requests.get", return_value=mock_response(mock_version_response))
+
+    warn_if_update_available()
+    captured = capsys.readouterr()
+
+    assert "Warning" not in captured.err
+
+
+def test_warn_if_update_available_no_warning_for_older_pypi_version(
+    mocker, capsys, mock_response
+):
+    mock_version_response = {"info": {"version": "0.54.17"}}
 
     mocker.patch("requests.get", return_value=mock_response(mock_version_response))
 

@@ -6,6 +6,7 @@ import click
 import orjson
 import requests
 from halo import Halo
+from packaging.version import Version
 
 from seagoat import __version__
 from seagoat.query_service import (
@@ -26,7 +27,7 @@ class ExitCode:
 def warn_if_update_available():
     response = requests.get("https://pypi.org/pypi/seagoat/json")
     latest_version = orjson.loads(response.text)["info"]["version"]
-    if latest_version != __version__:
+    if Version(latest_version) > Version(__version__):
         click.echo(
             f"Warning: An updated version {latest_version} of SeaGOAT is available. You have {__version__}.",
             err=True,
@@ -52,7 +53,13 @@ def display_accuracy_warning(server_address):
 
 
 def query_server(
-    query, repo_path, server_address, max_results, context_above, context_below
+    query,
+    repo_path,
+    server_address,
+    max_results,
+    context_above,
+    context_below,
+    include_performance=False,
 ):
     try:
         response_data = search_repo(
@@ -62,12 +69,30 @@ def query_server(
             context_above=context_above,
             context_below=context_below,
             server_address=server_address,
+            include_performance=include_performance,
         )
     except RuntimeError as error:
         click.echo(str(error), err=True)
         sys.exit(ExitCode.SERVER_ERROR)
 
-    return response_data["results"]
+    return response_data
+
+
+def display_performance(performance):
+    if not performance:
+        return
+
+    engine = performance.get("engine", {})
+    sources = engine.get("sources", {})
+    click.echo("Performance:")
+    click.echo(f"  total: {performance.get('totalMilliseconds')} ms")
+    click.echo(f"  queue wait: {performance.get('queueWaitMilliseconds')} ms")
+    click.echo(f"  engine: {engine.get('totalMilliseconds')} ms")
+    for source_name, elapsed in sorted(sources.items()):
+        click.echo(f"  {source_name}: {elapsed} ms")
+    click.echo(f"  context: {engine.get('contextMilliseconds')} ms")
+    click.echo(f"  format: {engine.get('formatMilliseconds')} ms")
+    click.echo(f"  serialization: {performance.get('serializationMilliseconds')} ms")
 
 
 SEARCH_HELP = """
@@ -159,6 +184,7 @@ def run_search_command(
     vimgrep,
     reverse: bool,
     generative: bool,
+    performance: bool,
 ):
     exit_code = 0
     color_enabled = False
@@ -178,15 +204,17 @@ def run_search_command(
             context_above = context
             context_below = context
 
-        results = query_server(
+        response_data = query_server(
             query,
             repo_path,
             server_address,
             max_results,
             context_above if context_above is not None else 3,
             context_below if context_below is not None else 3,
+            include_performance=performance,
         )
 
+        results = response_data["results"]
         results = remove_results_from_unavailable_files(results)
         if reverse or generative:
             results = reversed(results)
@@ -201,6 +229,8 @@ def run_search_command(
         color_enabled = os.isatty(0) and not no_color and not vimgrep
 
         display_results(results, max_results, color_enabled, vimgrep)
+        if performance and not vimgrep:
+            display_performance(response_data.get("performance"))
 
         display_accuracy_warning(server_address)
     except (
@@ -284,6 +314,12 @@ def run_search_command(
     default=False,
     help="Use a generative model to enhance results",
 )
+@click.option(
+    "--performance",
+    is_flag=True,
+    default=False,
+    help="Include query performance timings in the output.",
+)
 def search(
     query,
     repo_path,
@@ -295,6 +331,7 @@ def search(
     vimgrep,
     reverse: bool,
     generative: bool,
+    performance: bool,
 ):
     raise SystemExit(
         run_search_command(
@@ -308,6 +345,7 @@ def search(
             vimgrep,
             reverse,
             generative,
+            performance,
         )
     )
 

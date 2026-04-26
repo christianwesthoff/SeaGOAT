@@ -1,6 +1,8 @@
+import platform
 from pathlib import Path
 
 import chromadb
+import onnxruntime
 from chromadb.config import Settings
 from chromadb.utils import embedding_functions
 
@@ -10,6 +12,10 @@ from seagoat.result import Result
 from seagoat.utils.config import get_config_values
 
 MAXIMUM_VECTOR_DISTANCE = 1.5
+COREML_PROVIDER = "CoreMLExecutionProvider"
+CPU_PROVIDER = "CPUExecutionProvider"
+DEFAULT_EMBEDDING_FUNCTION = "DefaultEmbeddingFunction"
+APPLE_SILICON_EMBEDDING_FUNCTION = "ONNXMiniLM_L6_V2"
 
 
 def get_metadata_and_distance_from_chromadb_result(chromadb_results):
@@ -53,6 +59,29 @@ def format_results(query_text: str, repository, chromadb_results):
     return files.values()
 
 
+def is_coreml_available_on_apple_silicon():
+    if platform.system() != "Darwin" or platform.machine() != "arm64":
+        return False
+
+    return COREML_PROVIDER in onnxruntime.get_available_providers()
+
+
+def resolve_embedding_function_config(embedding_function_config):
+    embedding_function_name = embedding_function_config["name"]
+    embedding_function_kwargs = embedding_function_config["arguments"]
+
+    if (
+        embedding_function_name == DEFAULT_EMBEDDING_FUNCTION
+        and not embedding_function_kwargs
+        and is_coreml_available_on_apple_silicon()
+    ):
+        return APPLE_SILICON_EMBEDDING_FUNCTION, {
+            "preferred_providers": [COREML_PROVIDER, CPU_PROVIDER]
+        }
+
+    return embedding_function_name, embedding_function_kwargs
+
+
 def initialize(repository: Repository):
     cache = Cache("chroma", Path(repository.path), {})
     config = get_config_values(Path(repository.path))
@@ -63,10 +92,9 @@ def initialize(repository: Repository):
             anonymized_telemetry=False,
         ),
     )
-    embedding_function_name = config["server"]["chroma"]["embeddingFunction"]["name"]
-    embedding_function_kwargs = config["server"]["chroma"]["embeddingFunction"][
-        "arguments"
-    ]
+    embedding_function_name, embedding_function_kwargs = resolve_embedding_function_config(
+        config["server"]["chroma"]["embeddingFunction"]
+    )
     embedding_function = getattr(embedding_functions, embedding_function_name)(
         **embedding_function_kwargs
     )

@@ -38,6 +38,7 @@ def run_search_tool(
     max_results: int | None = None,
     context_above: int | None = None,
     context_below: int | None = None,
+    include_performance: bool = False,
 ) -> dict[str, Any]:
     normalized_query = query.strip()
     if not normalized_query:
@@ -46,20 +47,24 @@ def run_search_tool(
     normalized_repo_path = validate_repo_path(repo_path)
 
     try:
-        search_data = search_repo(
-            query=normalized_query,
-            repo_path=normalized_repo_path,
-            max_results=DEFAULT_MCP_MAX_RESULTS
+        search_kwargs = {
+            "query": normalized_query,
+            "repo_path": normalized_repo_path,
+            "max_results": DEFAULT_MCP_MAX_RESULTS
             if max_results is None
             else max_results,
-            context_above=DEFAULT_MCP_CONTEXT_ABOVE
+            "context_above": DEFAULT_MCP_CONTEXT_ABOVE
             if context_above is None
             else context_above,
-            context_below=DEFAULT_MCP_CONTEXT_BELOW
+            "context_below": DEFAULT_MCP_CONTEXT_BELOW
             if context_below is None
             else context_below,
-            request_timeout=DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS,
-        )
+            "request_timeout": DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS,
+        }
+        if include_performance:
+            search_kwargs["include_performance"] = True
+
+        search_data = search_repo(**search_kwargs)
     except ServerDoesNotExist as exc:
         raise RuntimeError(
             "No SeaGOAT server is running for "
@@ -75,7 +80,7 @@ def run_search_tool(
         ) from exc
 
     result_count = len(search_data["results"])
-    return {
+    result = {
         "summary": build_summary(
             query=normalized_query,
             repo_path=normalized_repo_path,
@@ -86,3 +91,6 @@ def run_search_tool(
         "result_count": result_count,
         "results": search_data["results"],
     }
+    if "performance" in search_data:
+        result["performance"] = search_data["performance"]
+    return result

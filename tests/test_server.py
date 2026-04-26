@@ -282,6 +282,25 @@ def test_query_with_limit_clue_param(client, limit_value, mock_queue):
     assert response.status_code == 200
 
 
+def test_query_with_include_performance_param(client, mock_queue):
+    response = client.post(
+        "lines/query",
+        json={
+            "queryText": "Markdown",
+            "includePerformance": True,
+        },
+    )
+    mock_queue.enqueue.assert_called_with(
+        "query",
+        query="Markdown",
+        limit_clue=ANY,
+        context_below=ANY,
+        context_above=ANY,
+        include_performance=True,
+    )
+    assert response.status_code == 200
+
+
 def test_status_endpoint_reads_queue_stats_without_enqueuing(client, mock_queue):
     mock_queue.get_stats.return_value = {
         "queue": {"size": 7},

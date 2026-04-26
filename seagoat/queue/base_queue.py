@@ -1,5 +1,6 @@
 import logging
 import threading
+import time
 from dataclasses import dataclass, field
 from queue import Empty, PriorityQueue
 from typing import Any, Dict, Tuple
@@ -43,7 +44,11 @@ class BaseQueue:
             priority=priority,
             name=task_name,
             args=args,
-            kwargs={**kwargs, "__result_queue": result_queue},
+            kwargs={
+                **kwargs,
+                "__enqueued_at": time.perf_counter(),
+                "__result_queue": result_queue,
+            },
         )
         self._task_queue.put(task)
         if wait_for_result:
@@ -66,6 +71,9 @@ class BaseQueue:
         if handler:
             kwargs = dict(task.kwargs or {})
             result_queue = kwargs.pop("__result_queue", None)
+            enqueued_at = kwargs.pop("__enqueued_at", None)
+            if kwargs.get("include_performance") and enqueued_at is not None:
+                kwargs["__queue_wait_seconds"] = time.perf_counter() - enqueued_at
             result = handler(context, *task.args, **kwargs)
             if result_queue is not None:
                 result_queue.put(result)

@@ -1,6 +1,7 @@
 from time import sleep
 from unittest.mock import Mock
 
+import orjson
 import pytest
 
 from seagoat.queue.task_queue import TaskQueue
@@ -33,10 +34,8 @@ def create_task_queue(repo):
         (150_000, 5, 99),
     ],
 )
-def test_handle_get_stats(
-    create_task_queue, chunks_analyzed, unanalyzed, expected_accuracy
-):
-    task_queue = create_task_queue()
+def test_handle_get_stats(chunks_analyzed, unanalyzed, expected_accuracy):
+    task_queue = TaskQueue.__new__(TaskQueue)
     context = {
         "seagoat_engine": Mock(),
     }
@@ -46,10 +45,56 @@ def test_handle_get_stats(
         "chunks_not_yet_analyzed": set(range(unanalyzed)),
     }
 
-    stats = task_queue.handle_get_stats(context)
-    task_queue.shutdown()
+    task_queue._context = context
+    task_queue._task_queue = Mock()
+    task_queue._task_queue.qsize.return_value = 0
+    stats = task_queue.get_stats()
 
     assert stats["accuracy"]["percentage"] == expected_accuracy
+
+
+def test_handle_query_includes_performance_when_requested():
+    task_queue = TaskQueue.__new__(TaskQueue)
+    result = Mock()
+    result.to_json.return_value = {"path": "file.py"}
+    engine = Mock()
+    engine.query_sync.return_value = (
+        [result],
+        {
+            "totalMilliseconds": 10.5,
+            "sources": {
+                "chroma": 7.0,
+                "ripgrep": 2.0,
+            },
+            "formatMilliseconds": 1.5,
+        },
+    )
+
+    payload = task_queue.handle_query(
+        {"seagoat_engine": engine},
+        query="Markdown",
+        limit_clue=3,
+        context_above=0,
+        context_below=1,
+        include_performance=True,
+        __queue_wait_seconds=0.012,
+    )
+
+    data = orjson.loads(payload)
+    assert data["results"] == [{"path": "file.py"}]
+    assert data["performance"]["queueWaitMilliseconds"] == 12.0
+    assert data["performance"]["engine"]["sources"] == {
+        "chroma": 7.0,
+        "ripgrep": 2.0,
+    }
+    assert data["performance"]["totalMilliseconds"] >= 12.0
+    engine.query_sync.assert_called_once_with(
+        "Markdown",
+        limit_clue=3,
+        context_above=0,
+        context_below=1,
+        include_performance=True,
+    )
 
 
 def test_important_files_are_analyzed_first(create_task_queue, mocker, repo):
