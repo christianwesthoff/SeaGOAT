@@ -442,6 +442,76 @@ def test_start_command_does_not_print_after_blocking_server_returns(
     assert "Server running." not in result.output
 
 
+def test_benchmark_indexing_command_outputs_json(runner, mocker, repo):
+    benchmark_data = {
+        "repoPath": repo.working_dir,
+        "minimumChunksToAnalyze": 5,
+        "chunks": {
+            "analyzedBefore": 1,
+            "analyzedAfter": 6,
+            "analyzedThisRun": 5,
+            "remaining": 10,
+        },
+        "timings": {
+            "totalMilliseconds": 12.3,
+            "engineInitMilliseconds": 1.0,
+            "repoScanMilliseconds": 2.0,
+            "sourceCacheMilliseconds": {"ripgrep": 3.0, "chroma": 0.1},
+            "vectorEmbeddingsMilliseconds": 6.2,
+        },
+    }
+    mocked_benchmark = mocker.patch(
+        "seagoat.server.run_indexing_benchmark",
+        return_value=benchmark_data,
+    )
+
+    result = runner.invoke(
+        seagoat_server,
+        [
+            "benchmark-indexing",
+            repo.working_dir,
+            "--minimum-chunks",
+            "5",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.output) == benchmark_data
+    mocked_benchmark.assert_called_once_with(repo.working_dir, 5)
+
+
+def test_benchmark_indexing_command_outputs_text(runner, mocker, repo):
+    mocker.patch(
+        "seagoat.server.run_indexing_benchmark",
+        return_value={
+            "repoPath": repo.working_dir,
+            "minimumChunksToAnalyze": None,
+            "chunks": {
+                "analyzedBefore": 1,
+                "analyzedAfter": 6,
+                "analyzedThisRun": 5,
+                "remaining": 10,
+            },
+            "timings": {
+                "totalMilliseconds": 12.3,
+                "engineInitMilliseconds": 1.0,
+                "repoScanMilliseconds": 2.0,
+                "sourceCacheMilliseconds": {"ripgrep": 3.0, "chroma": 0.1},
+                "vectorEmbeddingsMilliseconds": 6.2,
+            },
+        },
+    )
+
+    result = runner.invoke(seagoat_server, ["benchmark-indexing", repo.working_dir])
+
+    assert result.exit_code == 0
+    assert f"Repository: {repo.working_dir}" in result.output
+    assert "analyzed this run: 5" in result.output
+    assert "ripgrep cache: 3.0 ms" in result.output
+    assert "vector embeddings: 6.2 ms" in result.output
+
+
 @pytest.mark.parametrize("custom_port", [7483, 9981])
 def test_start_server_on_specific_port(custom_port, repo, mocker, managed_process):
     mocker.patch("seagoat.server.TaskQueue")

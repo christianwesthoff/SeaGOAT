@@ -2,6 +2,7 @@ import sys
 import json
 import logging
 import os
+import time
 from pathlib import Path
 from collections import OrderedDict
 from datetime import datetime
@@ -199,6 +200,30 @@ def get_server(repo_path, custom_port=None):
     start_server(str(repo_path), custom_port=port)
 
 
+def milliseconds(seconds: float) -> float:
+    return round(seconds * 1000, 3)
+
+
+def run_indexing_benchmark(repo_path, minimum_chunks_to_analyze=None):
+    from seagoat.engine import Engine
+
+    benchmark_started_at = time.perf_counter()
+    engine_started_at = time.perf_counter()
+    engine = Engine(repo_path)
+    engine_init_milliseconds = milliseconds(time.perf_counter() - engine_started_at)
+
+    benchmark_data = engine.benchmark_indexing(
+        minimum_chunks_to_analyze=minimum_chunks_to_analyze
+    )
+    benchmark_data["repoPath"] = str(Path(repo_path).expanduser().resolve())
+    benchmark_data["timings"]["engineInitMilliseconds"] = engine_init_milliseconds
+    benchmark_data["timings"]["totalMilliseconds"] = milliseconds(
+        time.perf_counter() - benchmark_started_at
+    )
+
+    return benchmark_data
+
+
 @click.group()
 @click.version_option(version=__version__, prog_name="seagoat")
 def server():
@@ -219,6 +244,40 @@ def start(repo_path, port):
     port = port if port is not None else config["server"]["port"]
 
     get_server(repo_path, custom_port=port)
+
+
+@server.command(name="benchmark-indexing")
+@click.argument("repo_path")
+@click.option(
+    "--minimum-chunks",
+    type=int,
+    default=None,
+    help="Limit how many chunks are embedded during the benchmark.",
+)
+@click.option("--json", "use_json_format", is_flag=True, help="Output benchmark as JSON.")
+def benchmark_indexing(repo_path, minimum_chunks, use_json_format):
+    """Benchmarks local indexing for a repository."""
+    benchmark_data = run_indexing_benchmark(repo_path, minimum_chunks)
+
+    if use_json_format:
+        click.echo(json.dumps(benchmark_data))
+        return
+
+    timings = benchmark_data["timings"]
+    chunks = benchmark_data["chunks"]
+    click.echo(f"Repository: {benchmark_data['repoPath']}")
+    click.echo("Chunks:")
+    click.echo(f"  analyzed before: {chunks['analyzedBefore']}")
+    click.echo(f"  analyzed after: {chunks['analyzedAfter']}")
+    click.echo(f"  analyzed this run: {chunks['analyzedThisRun']}")
+    click.echo(f"  remaining: {chunks['remaining']}")
+    click.echo("Timings:")
+    click.echo(f"  total: {timings['totalMilliseconds']} ms")
+    click.echo(f"  engine init: {timings['engineInitMilliseconds']} ms")
+    click.echo(f"  repo scan: {timings['repoScanMilliseconds']} ms")
+    for source_name, elapsed in sorted(timings["sourceCacheMilliseconds"].items()):
+        click.echo(f"  {source_name} cache: {elapsed} ms")
+    click.echo(f"  vector embeddings: {timings['vectorEmbeddingsMilliseconds']} ms")
 
 
 def get_status_data(repo_path):

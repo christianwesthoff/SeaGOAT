@@ -356,6 +356,23 @@ def test_processes_multiple_chunks_with_one_cache_persist(repo, mocker):
     persist.assert_called_once_with()
 
 
+def test_benchmark_indexing_reports_timings_and_chunk_counts(repo):
+    seagoat = Engine(repo.working_dir)
+
+    benchmark = seagoat.benchmark_indexing(minimum_chunks_to_analyze=2)
+
+    assert benchmark["minimumChunksToAnalyze"] == 2
+    assert benchmark["chunks"]["analyzedBefore"] == 0
+    assert benchmark["chunks"]["analyzedThisRun"] == 2
+    assert benchmark["chunks"]["analyzedAfter"] == 2
+    assert benchmark["chunks"]["remaining"] >= 0
+    assert benchmark["timings"]["totalMilliseconds"] >= 0
+    assert benchmark["timings"]["repoScanMilliseconds"] >= 0
+    assert benchmark["timings"]["sourceCacheMilliseconds"]["ripgrep"] >= 0
+    assert benchmark["timings"]["sourceCacheMilliseconds"]["chroma"] >= 0
+    assert benchmark["timings"]["vectorEmbeddingsMilliseconds"] >= 0
+
+
 @pytest.mark.parametrize(
     "config,expected_extra_args",
     [

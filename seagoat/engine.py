@@ -104,6 +104,50 @@ class Engine:
 
         return self._create_vector_embeddings(minimum_chunks_to_analyze, should_continue)
 
+    def benchmark_indexing(self, minimum_chunks_to_analyze=None):
+        benchmark_started_at = time.perf_counter()
+        timings = {
+            "repoScanMilliseconds": 0.0,
+            "sourceCacheMilliseconds": {},
+            "vectorEmbeddingsMilliseconds": 0.0,
+        }
+        analyzed_before = len(self.cache.data["chunks_already_analyzed"])
+
+        repo_scan_started_at = time.perf_counter()
+        self.repository.analyze_files()
+        timings["repoScanMilliseconds"] = milliseconds(
+            time.perf_counter() - repo_scan_started_at
+        )
+
+        for fetcher in self._fetchers["async"] + self._fetchers["sync"]:
+            source_name = fetcher["name"]
+            source_started_at = time.perf_counter()
+            fetcher["cache_repo"]()
+            timings["sourceCacheMilliseconds"][source_name] = milliseconds(
+                time.perf_counter() - source_started_at
+            )
+
+        embeddings_started_at = time.perf_counter()
+        remaining_chunks = self._create_vector_embeddings(minimum_chunks_to_analyze)
+        timings["vectorEmbeddingsMilliseconds"] = milliseconds(
+            time.perf_counter() - embeddings_started_at
+        )
+        timings["totalMilliseconds"] = milliseconds(
+            time.perf_counter() - benchmark_started_at
+        )
+
+        analyzed_after = len(self.cache.data["chunks_already_analyzed"])
+        return {
+            "minimumChunksToAnalyze": minimum_chunks_to_analyze,
+            "chunks": {
+                "analyzedBefore": analyzed_before,
+                "analyzedAfter": analyzed_after,
+                "analyzedThisRun": analyzed_after - analyzed_before,
+                "remaining": len(remaining_chunks or []),
+            },
+            "timings": timings,
+        }
+
     def _add_to_collection(self, chunk):
         for source in chain(*self._fetchers.values()):
             source["cache_chunk"](chunk)
