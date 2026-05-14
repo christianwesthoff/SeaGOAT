@@ -165,3 +165,4 @@ prof/
 benchmark/examples/*/results/
 
 .DS_Store
+.worktrees/
