@@ -43,7 +43,10 @@ class TaskQueue(BaseQueue):
         seagoat_engine = Engine(self.kwargs["repo_path"])
         context["seagoat_engine"] = seagoat_engine
         context["last_maintenance"] = None
-        context["last_repo_state_hash"] = None
+        context["last_repo_state_hash"] = seagoat_engine.cache.data[
+            "last_successful_index_repo_hash"
+        ]
+        context["pending_repo_state_hash"] = None
         return context
 
     def handle_maintenance(self, context):
@@ -72,11 +75,12 @@ class TaskQueue(BaseQueue):
 
         if remaining_chunks_to_analyze is None:
             logging.info("Paused repository maintenance because tasks are waiting.")
+            context["pending_repo_state_hash"] = None
             return
 
-        context["last_repo_state_hash"] = current_repo_state_hash
-        logging.info("Analyzed the minimum number of chunks needed to operate. ")
         if remaining_chunks_to_analyze:
+            context["pending_repo_state_hash"] = current_repo_state_hash
+            logging.info("Analyzed the minimum number of chunks needed to operate. ")
             logging.info(
                 "Note, %s chunks need to be analyzed for optimum performance.",
                 len(remaining_chunks_to_analyze),
@@ -98,6 +102,10 @@ class TaskQueue(BaseQueue):
                     wait_for_result=False,
                 )
         else:
+            context["pending_repo_state_hash"] = None
+            context["last_repo_state_hash"] = context["seagoat_engine"].cache.data[
+                "last_successful_index_repo_hash"
+            ]
             logging.info("Analyzed all chunks!")
 
     def handle_analyze_chunk(self, context, chunk):
@@ -109,6 +117,15 @@ class TaskQueue(BaseQueue):
         context["seagoat_engine"].process_chunks(chunks)
 
         if self._task_queue.qsize() == 0:
+            if (
+                context["seagoat_engine"].has_pending_reindex()
+                and context.get("pending_repo_state_hash") is not None
+            ):
+                context["seagoat_engine"].finalize_pending_reindex()
+                context["last_repo_state_hash"] = context["seagoat_engine"].cache.data[
+                    "last_successful_index_repo_hash"
+                ]
+                context["pending_repo_state_hash"] = None
             logging.info("Analyzed all chunks!")
 
     def handle_query(self, context, **kwargs):

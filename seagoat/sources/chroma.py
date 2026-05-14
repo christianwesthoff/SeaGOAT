@@ -186,6 +186,15 @@ def initialize(repository: Repository):
             ],
         )
 
+    def delete_chunks(chunk_ids):
+        chunk_ids = list(chunk_ids)
+        if not chunk_ids:
+            return
+
+        _clear_query_cache()
+        for start in range(0, len(chunk_ids), batch_size):
+            chroma_collection.delete(ids=chunk_ids[start : start + batch_size])
+
     def cache_repo(should_continue=None):
         # chromadb does not need any repo cache action
         return True
@@ -195,5 +204,6 @@ def initialize(repository: Repository):
         "cache_chunk": cache_chunk,
         "cache_chunks": cache_chunks,
         "cache_repo": cache_repo,
+        "delete_chunks": delete_chunks,
         "flush_batch": _flush_batch,
     }

@@ -42,6 +42,8 @@ class RepositoryData(TypedDict):
     sorted_files: List[str]
     chunks_already_analyzed: Set[str]
     chunks_not_yet_analyzed: Set[str]
+    last_successful_index_chunk_ids: Set[str]
+    last_successful_index_repo_hash: str | None
 
 
 nest_asyncio.apply()
@@ -73,11 +75,16 @@ class Engine:
                 "sorted_files": [],
                 "chunks_already_analyzed": set(),
                 "chunks_not_yet_analyzed": set(),
+                "last_successful_index_chunk_ids": set(),
+                "last_successful_index_repo_hash": None,
             },
         )
         self.cache.load()
+        self._ensure_cache_defaults()
         self.repository = Repository(path)
         self.config = get_config_values(Path(path))
+        self._pending_reindex_chunk_ids: Set[str] | None = None
+        self._pending_reindex_repo_hash: str | None = None
 
         ripgrep_fetcher = ripgrep.initialize(self.repository)
         ripgrep_fetcher.setdefault("name", "ripgrep")
@@ -89,9 +96,66 @@ class Engine:
             "sync": [chroma_fetcher],
         }
 
+    def _ensure_cache_defaults(self):
+        self.cache.data.setdefault("chunks_already_analyzed", set())
+        self.cache.data.setdefault("chunks_not_yet_analyzed", set())
+        self.cache.data["chunks_already_analyzed"] = set(
+            self.cache.data["chunks_already_analyzed"]
+        )
+        self.cache.data["chunks_not_yet_analyzed"] = set(
+            self.cache.data["chunks_not_yet_analyzed"]
+        )
+        self.cache.data.setdefault(
+            "last_successful_index_chunk_ids",
+            set(self.cache.data["chunks_already_analyzed"]),
+        )
+        self.cache.data["last_successful_index_chunk_ids"] = set(
+            self.cache.data["last_successful_index_chunk_ids"]
+        )
+        self.cache.data.setdefault("last_successful_index_repo_hash", None)
+
+    def _clear_pending_reindex(self):
+        self._pending_reindex_chunk_ids = None
+        self._pending_reindex_repo_hash = None
+
+    def has_pending_reindex(self):
+        return self._pending_reindex_chunk_ids is not None
+
+    def finalize_pending_reindex(self):
+        if self._pending_reindex_chunk_ids is None:
+            return False
+
+        stale_chunk_ids = (
+            self.cache.data["last_successful_index_chunk_ids"]
+            - self._pending_reindex_chunk_ids
+        )
+
+        if stale_chunk_ids:
+            for source in chain(*self._fetchers.values()):
+                delete_chunks = source.get("delete_chunks")
+                if delete_chunks is not None:
+                    delete_chunks(stale_chunk_ids)
+
+        self.cache.data["last_successful_index_chunk_ids"] = set(
+            self._pending_reindex_chunk_ids
+        )
+        self.cache.data["last_successful_index_repo_hash"] = (
+            self._pending_reindex_repo_hash
+        )
+        self.cache.data["chunks_already_analyzed"].intersection_update(
+            self._pending_reindex_chunk_ids
+        )
+        self.cache.data["chunks_not_yet_analyzed"].intersection_update(
+            self._pending_reindex_chunk_ids
+        )
+        self.cache.persist()
+        self._clear_pending_reindex()
+        return True
+
     def analyze_codebase(
         self, minimum_chunks_to_analyze=None, should_continue=should_continue_by_default
     ):
+        self._clear_pending_reindex()
         self.repository.analyze_files()
 
         for fetcher in self._fetchers["async"] + self._fetchers["sync"]:
@@ -102,7 +166,17 @@ class Engine:
             if not should_continue():
                 return None
 
-        return self._create_vector_embeddings(minimum_chunks_to_analyze, should_continue)
+        remaining_chunks_to_process = self._create_vector_embeddings(
+            minimum_chunks_to_analyze, should_continue
+        )
+        if remaining_chunks_to_process is None:
+            self._clear_pending_reindex()
+            return None
+
+        if not remaining_chunks_to_process:
+            self.finalize_pending_reindex()
+
+        return remaining_chunks_to_process
 
     def benchmark_indexing(self, minimum_chunks_to_analyze=None):
         benchmark_started_at = time.perf_counter()
@@ -129,6 +203,7 @@ class Engine:
 
         embeddings_started_at = time.perf_counter()
         remaining_chunks = self._create_vector_embeddings(minimum_chunks_to_analyze)
+        self._clear_pending_reindex()
         timings["vectorEmbeddingsMilliseconds"] = milliseconds(
             time.perf_counter() - embeddings_started_at
         )
@@ -184,14 +259,20 @@ class Engine:
         self, minimum_chunks_to_analyze=None, should_continue=should_continue_by_default
     ):
         chunks_to_process = []
+        current_chunk_ids = set()
 
         for file, _ in self.repository.top_files():
             if not should_continue():
+                self._clear_pending_reindex()
                 return None
             for chunk in file.get_chunks():
+                current_chunk_ids.add(chunk.chunk_id)
                 if chunk.chunk_id not in self.cache.data["chunks_already_analyzed"]:
                     chunks_to_process.append(chunk)
                     self.cache.data["chunks_not_yet_analyzed"].add(chunk.chunk_id)
+
+        self._pending_reindex_chunk_ids = current_chunk_ids
+        self._pending_reindex_repo_hash = self.repository.get_status_hash()
 
         if minimum_chunks_to_analyze is None:
             minimum_chunks_to_analyze = min(
@@ -208,12 +289,14 @@ class Engine:
         ) as progress:
             for batch in batched(chunks_to_analyze, INDEXING_BATCH_SIZE):
                 if not should_continue():
+                    self._clear_pending_reindex()
                     return None
                 self.process_chunks(batch)
                 progress.update(len(batch))
 
         for source in chain(*self._fetchers.values()):
             if not should_continue():
+                self._clear_pending_reindex()
                 return None
             source.get("flush_batch", lambda: None)()
 

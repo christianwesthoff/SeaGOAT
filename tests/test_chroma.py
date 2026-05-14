@@ -249,6 +249,62 @@ def test_chroma_query_cache_is_cleared_when_chunks_are_cached(repo, mocker):
     assert collection.query.call_count == 2
 
 
+def test_deletes_stale_chunks_after_successful_full_reindex(repo, mocker):
+    collection = mocker.Mock()
+    chroma_client = mocker.Mock()
+    chroma_client.get_or_create_collection.return_value = collection
+    mocker.patch(
+        "seagoat.sources.chroma.chromadb.PersistentClient",
+        return_value=chroma_client,
+    )
+    repo.add_file_change_commit(
+        file_name="new_file.cpp",
+        contents="\n".join([
+            "#include <iostream>",
+            "int main() {",
+            '    std::cout << "Hello";',
+            "}",
+        ]),
+        author=repo.actors["John Doe"],
+        commit_message="Initial commit for C++ file",
+    )
+    seagoat = Engine(repo.working_dir)
+    seagoat.repository.analyze_files()
+    old_chunk_ids = {
+        chunk.chunk_id for chunk in seagoat.repository.get_file("new_file.cpp").get_chunks()
+    }
+
+    seagoat.analyze_codebase(minimum_chunks_to_analyze=1000)
+
+    repo.add_file_change_commit(
+        file_name="new_file.cpp",
+        contents="\n".join([
+            "#include <iostream>",
+            "int main() {",
+            '    std::cout << "Updated";',
+            "    return 0;",
+            "}",
+        ]),
+        author=repo.actors["John Doe"],
+        commit_message="Update C++ file",
+    )
+    seagoat.repository.analyze_files()
+    new_chunk_ids = {
+        chunk.chunk_id for chunk in seagoat.repository.get_file("new_file.cpp").get_chunks()
+    }
+    all_current_chunk_ids = {
+        chunk.chunk_id
+        for file, _ in seagoat.repository.top_files()
+        for chunk in file.get_chunks()
+    }
+
+    seagoat.analyze_codebase(minimum_chunks_to_analyze=1000)
+
+    collection.delete.assert_called_once()
+    assert set(collection.delete.call_args.kwargs["ids"]) == old_chunk_ids - new_chunk_ids
+    assert seagoat.cache.data["last_successful_index_chunk_ids"] == all_current_chunk_ids
+
+
 @pytest.fixture(autouse=True)
 def use_real_db(real_chromadb):
     pass

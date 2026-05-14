@@ -149,6 +149,47 @@ def test_maintenance_does_not_mark_repo_analyzed_when_interrupted():
     assert context["last_repo_state_hash"] is None
 
 
+def test_maintenance_defers_finalize_until_background_reindex_finishes():
+    task_queue = TaskQueue.__new__(TaskQueue)
+    task_queue.kwargs = {"minimum_chunks_to_analyze": 1}
+    task_queue._task_queue = Mock()
+    task_queue._task_queue.qsize.return_value = 0
+    task_queue.enqueue = Mock()
+    engine = Mock()
+    engine.repository.get_status_hash.return_value = "repo-hash"
+    engine.analyze_codebase.return_value = ["chunk-a", "chunk-b"]
+    context = {
+        "seagoat_engine": engine,
+        "last_maintenance": None,
+        "last_repo_state_hash": None,
+    }
+
+    task_queue.handle_maintenance(context)
+
+    engine.finalize_pending_reindex.assert_not_called()
+    assert context["last_repo_state_hash"] is None
+
+
+def test_last_background_chunk_finalizes_pending_reindex():
+    task_queue = TaskQueue.__new__(TaskQueue)
+    task_queue._task_queue = Mock()
+    task_queue._task_queue.qsize.return_value = 0
+    engine = Mock()
+    engine.cache.data = {"last_successful_index_repo_hash": "repo-hash"}
+    engine.has_pending_reindex.return_value = True
+    context = {
+        "seagoat_engine": engine,
+        "pending_repo_state_hash": "repo-hash",
+        "last_repo_state_hash": None,
+    }
+
+    task_queue.handle_analyze_chunks(context, ["chunk-a"])
+
+    engine.process_chunks.assert_called_once_with(["chunk-a"])
+    engine.finalize_pending_reindex.assert_called_once_with()
+    assert context["last_repo_state_hash"] == "repo-hash"
+
+
 def test_important_files_are_analyzed_first(create_task_queue, mocker, repo):
     enqueue = mocker.patch("seagoat.queue.task_queue.TaskQueue.enqueue")
     create_task_queue()
