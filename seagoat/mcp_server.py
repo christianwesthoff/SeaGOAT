@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from seagoat.mcp_tools.grep import run_grep_tool
 from seagoat.mcp_tools.read_file import run_read_file_tool
+from seagoat.mcp_tools.reason import run_reason_tool
 from seagoat.mcp_tools.research import run_research_tool
 from seagoat.mcp_tools.search import run_search_tool
 from seagoat.mcp_tools.status import run_server_status_tool
@@ -61,6 +62,22 @@ class ResearchToolResult(BaseModel):
     queries: list[dict[str, Any]]
     grouped_results: list[dict[str, Any]]
     suggested_reads: list[dict[str, Any]]
+    path_glob: str | None = None
+
+
+class ReasonToolResult(BaseModel):
+    summary: str
+    repo_path: str
+    question: str
+    reasoning_plan: str
+    plan: dict[str, Any]
+    queries: list[dict[str, Any]]
+    evidence: list[dict[str, Any]]
+    reads_performed: list[dict[str, Any]]
+    suggested_next_reads: list[dict[str, Any]]
+    findings: list[dict[str, Any]]
+    confidence: str
+    path_glob: str | None = None
 
 
 class ServerStatusToolResult(BaseModel):
@@ -138,12 +155,43 @@ def research(
     repo_path: str,
     max_results_per_query: int | None = None,
     include_performance: bool = False,
+    path_glob: str | None = None,
 ) -> ResearchToolResult:
     return ResearchToolResult.model_validate(
         run_research_tool(
             question=question,
             repo_path=repo_path,
             max_results_per_query=max_results_per_query,
+            include_performance=include_performance,
+            path_glob=path_glob,
+        )
+    )
+
+
+@mcp.tool()
+def reason(
+    question: str,
+    repo_path: str,
+    reasoning_plan: str = "query",
+    path_glob: str | None = None,
+    max_results_per_query: int | None = None,
+    read_strategy: str = "auto",
+    max_files_to_read: int = 8,
+    context_above: int = 1,
+    context_below: int = 1,
+    include_performance: bool = False,
+) -> ReasonToolResult:
+    return ReasonToolResult.model_validate(
+        run_reason_tool(
+            question=question,
+            repo_path=repo_path,
+            reasoning_plan=reasoning_plan,
+            path_glob=path_glob,
+            max_results_per_query=max_results_per_query,
+            read_strategy=read_strategy,
+            max_files_to_read=max_files_to_read,
+            context_above=context_above,
+            context_below=context_below,
             include_performance=include_performance,
         )
     )

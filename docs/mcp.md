@@ -34,23 +34,22 @@ SeaGOAT currently exposes these MCP tools:
 - `search(query, repo_path, max_results, context_above, context_below)`
 - `read_file(repo_path, file_path, start_line, end_line)`
 - `grep(repo_path, pattern, max_results, case_sensitive, regex, path_glob, timeout_seconds)`
-- `research(question, repo_path, max_results_per_query, include_performance)`
+- `research(question, repo_path, max_results_per_query, include_performance, path_glob)`
 
 ## Recommended workflow
 
 Use SeaGOAT MCP as a research loop:
 
-1. Use `server_status` to check whether indexed semantic search is available
-   for the target repo.
-2. Use `research` to expand the question into likely terms, symbols, and paths
-   when the repo server is running.
-3. Use `search` for semantic discovery when the SeaGOAT repo server is running.
-4. Use `grep` for literal symbols, error text, and filenames that do not need
-   semantic ranking.
-   Scope large-repo searches with `path_glob` and set `timeout_seconds` when
-   partial results are more useful than waiting for a full scan.
-5. Use `read_file` to inspect the relevant files and line ranges directly.
-6. Answer with citations to the repository file paths that support the result.
+1. Use `server_status` first to check whether indexed semantic search is
+   available for the target repo.
+2. Use `research` when the repo server is running. Pass `path_glob` when you
+   want fast exact research scoped to a package, directory, or file type. Scoped
+   research skips unscoped semantic search and uses exact matches instead.
+3. Use `grep` for literal symbols, error text, and filenames. Scope searches
+   with `path_glob` and set `timeout_seconds` so large repositories can return
+   useful partial results quickly.
+4. Use `read_file` to inspect the relevant files and line ranges directly.
+5. Answer with citations to the repository file paths that support the result.
 
 ## Troubleshooting
 

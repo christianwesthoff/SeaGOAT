@@ -100,8 +100,10 @@ seagoat-server start /path/to/your/repo
 ```
 
 The MCP server also exposes local helper tools for faster agent workflows:
-`server_status` checks whether semantic search is ready, while `grep` supports
-path-scoped exact searches and bounded timeouts for large repositories.
+start with `server_status` to check whether semantic search is ready, use
+`research` with `path_glob` for fast scoped exact research, fall back to scoped
+`grep` calls with `timeout_seconds` for focused exact matches, and then use
+`read_file` for targeted file and line inspection.
 
 ### Stopping the server
 

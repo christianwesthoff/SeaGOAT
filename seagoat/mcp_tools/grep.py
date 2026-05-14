@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import selectors
 import subprocess
 import time
 from pathlib import Path
@@ -87,9 +88,15 @@ def _run_rg_bounded(
     stdout_lines: list[str] = []
     match_count = 0
     timed_out = False
+    stopped_early = False
     start_time = time.monotonic()
     assert process.stdout is not None
-    for line in process.stdout:
+
+    def timeout_expired() -> bool:
+        return time.monotonic() - start_time >= timeout_seconds
+
+    def handle_line(line: str) -> bool:
+        nonlocal match_count, stopped_early, timed_out
         stdout_lines.append(line)
         try:
             event = json.loads(line)
@@ -97,13 +104,60 @@ def _run_rg_bounded(
             event = {}
         if event.get("type") == "match":
             match_count += 1
-            if time.monotonic() - start_time >= timeout_seconds:
+            if timeout_expired():
                 timed_out = True
+                stopped_early = True
                 process.terminate()
-                break
+                return False
         if match_count >= limit:
+            stopped_early = True
             process.terminate()
-            break
+            return False
+        return True
+
+    try:
+        stdout_fd = process.stdout.fileno()
+    except (AttributeError, OSError):
+        stdout_fd = None
+
+    if stdout_fd is None:
+        for line in process.stdout:
+            if not handle_line(line):
+                break
+        if process.poll() is None and timeout_expired():
+            timed_out = True
+            process.terminate()
+    else:
+        selector = selectors.DefaultSelector()
+        try:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            while process.poll() is None:
+                remaining_seconds = timeout_seconds - (time.monotonic() - start_time)
+                if remaining_seconds <= 0:
+                    timed_out = True
+                    stopped_early = True
+                    process.terminate()
+                    break
+
+                events = selector.select(timeout=remaining_seconds)
+                if not events:
+                    timed_out = True
+                    stopped_early = True
+                    process.terminate()
+                    break
+
+                line = process.stdout.readline()
+                if line == "":
+                    break
+                if not handle_line(line):
+                    break
+
+            if not stopped_early:
+                for line in process.stdout:
+                    if not handle_line(line):
+                        break
+        finally:
+            selector.close()
 
     try:
         _, stderr = process.communicate(timeout=5)

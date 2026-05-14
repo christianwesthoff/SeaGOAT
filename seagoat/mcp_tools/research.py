@@ -3,13 +3,17 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from seagoat.mcp_tools.grep import run_grep_tool
 from seagoat.mcp_tools.search import run_search_tool, validate_repo_path
+from seagoat.mcp_tools.status import run_server_status_tool
 
 DEFAULT_MAX_RESULTS_PER_QUERY = 5
 MAX_SNIPPETS_PER_FILE = 3
 MAX_SUGGESTED_READS = 10
 MAX_EXPANDED_QUERIES = 8
+MAX_EXACT_QUERIES = 8
 TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_:/.-]+")
+CAMEL_CASE_PATTERN = re.compile(r"[a-z][A-Z]")
 STOP_WORDS = {
     "about",
     "after",
@@ -42,6 +46,30 @@ STOP_WORDS = {
     "with",
     "would",
 }
+
+
+def _clean_token(token: str) -> str:
+    return token.strip(".,;:!?()[]{}\"'")
+
+
+def _is_identifier_like(token: str) -> bool:
+    if len(token) < 3 or token.lower() in STOP_WORDS:
+        return False
+    if "_" in token or "/" in token or "." in token or "::" in token:
+        return True
+    if token.isupper() and any(character.isalpha() for character in token):
+        return True
+    return CAMEL_CASE_PATTERN.search(token) is not None
+
+
+def extract_identifier_tokens(question: str) -> list[str]:
+    tokens = [
+        cleaned_token
+        for token in TOKEN_PATTERN.findall(question)
+        if (cleaned_token := _clean_token(token))
+    ]
+    identifiers = [token for token in tokens if _is_identifier_like(token)]
+    return list(dict.fromkeys(identifiers))[:MAX_EXACT_QUERIES]
 
 
 def expand_queries(question: str) -> list[str]:
@@ -217,8 +245,10 @@ def run_research_tool(
     repo_path: str,
     max_results_per_query: int | None = None,
     include_performance: bool = False,
+    path_glob: str | None = None,
 ) -> dict[str, Any]:
     queries = expand_queries(question)
+    exact_queries = extract_identifier_tokens(question)
     normalized_repo_path = validate_repo_path(repo_path)
     bounded_max_results = (
         DEFAULT_MAX_RESULTS_PER_QUERY
@@ -230,42 +260,94 @@ def run_research_tool(
 
     query_summaries = []
     results_by_query = []
+    server_status = run_server_status_tool(repo_path=normalized_repo_path)
 
-    for query in queries:
+    if path_glob is not None:
+        skip_reason = "Semantic search skipped because path_glob scopes exact research only."
+        for query in queries:
+            query_summaries.append(
+                {
+                    "query": query,
+                    "result_count": 0,
+                    "skipped": True,
+                    "reason": skip_reason,
+                }
+            )
+    elif server_status["running"]:
+        for query in queries:
+            try:
+                search_result = run_search_tool(
+                    query=query,
+                    repo_path=normalized_repo_path,
+                    max_results=bounded_max_results,
+                    context_above=1,
+                    context_below=1,
+                    include_performance=include_performance,
+                )
+            except RuntimeError as exc:
+                query_summaries.append(
+                    {
+                        "query": query,
+                        "result_count": 0,
+                        "error": str(exc),
+                    }
+                )
+                continue
+
+            results = search_result.get("results", [])
+            query_summaries.append(
+                {
+                    "query": query,
+                    "result_count": len(results),
+                }
+            )
+            results_by_query.append((query, results))
+    else:
+        skip_reason = server_status["summary"]
+        for query in queries:
+            query_summaries.append(
+                {
+                    "query": query,
+                    "result_count": 0,
+                    "skipped": True,
+                    "reason": skip_reason,
+                }
+            )
+
+    for exact_query in exact_queries:
+        query_label = f"exact:{exact_query}"
         try:
-            search_result = run_search_tool(
-                query=query,
+            grep_result = run_grep_tool(
                 repo_path=normalized_repo_path,
+                pattern=exact_query,
                 max_results=bounded_max_results,
-                context_above=1,
-                context_below=1,
-                include_performance=include_performance,
+                path_glob=path_glob,
             )
         except RuntimeError as exc:
             query_summaries.append(
                 {
-                    "query": query,
+                    "query": query_label,
                     "result_count": 0,
                     "error": str(exc),
                 }
             )
             continue
 
-        results = search_result.get("results", [])
+        results = grep_result.get("results", [])
         query_summaries.append(
             {
-                "query": query,
+                "query": query_label,
                 "result_count": len(results),
             }
         )
-        results_by_query.append((query, results))
+        results_by_query.append((query_label, results))
 
     grouped_results = _build_grouped_results(results_by_query)
     suggested_reads = _build_suggested_reads(results_by_query)
     file_count = len(grouped_results)
-    query_count = len(queries)
+    query_count = len(query_summaries)
 
-    return {
+    result = {
         "summary": (
             f"SeaGOAT researched '{queries[0]}' across {query_count} queries "
             f"and found matches in {file_count} files."
@@ -276,3 +358,6 @@ def run_research_tool(
         "grouped_results": grouped_results,
         "suggested_reads": suggested_reads,
     }
+    if path_glob is not None:
+        result["path_glob"] = path_glob
+    return result

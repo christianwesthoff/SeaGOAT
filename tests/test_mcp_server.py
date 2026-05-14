@@ -13,6 +13,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 
 from seagoat.cli import cli
 from seagoat.mcp_tools.read_file import run_read_file_tool
+from seagoat.mcp_tools.reason import run_reason_tool
 from seagoat.mcp_tools.search import build_summary, run_search_tool, validate_repo_path
 from seagoat.utils.server import ServerDoesNotExist, get_server_info
 from seagoat.utils.wait import wait_for
@@ -218,6 +219,15 @@ def test_run_read_file_tool_rejects_start_line_after_eof(tmp_path):
         )
 
 
+def test_run_reason_tool_rejects_invalid_read_strategy(tmp_path):
+    with pytest.raises(ValueError, match="read_strategy must be one of"):
+        run_reason_tool(
+            question="Where is ExportWorker queued?",
+            repo_path=str(tmp_path),
+            read_strategy="never",
+        )
+
+
 def test_mcp_server_subcommand_imports_real_module_and_calls_main(runner, mocker):
     mocked_main = mocker.patch("seagoat.mcp_server.main", return_value=0)
 
@@ -300,7 +310,14 @@ async def test_mcp_stdio_lists_tools_with_required_schemas():
             tools = await session.list_tools()
 
     tools_by_name = {tool.name: tool for tool in tools.tools}
-    assert {"search", "read_file", "grep", "research", "server_status"}.issubset(
+    assert {
+        "search",
+        "read_file",
+        "grep",
+        "research",
+        "reason",
+        "server_status",
+    }.issubset(
         tools_by_name
     )
     assert set(tools_by_name["search"].inputSchema["required"]) == {
@@ -315,12 +332,27 @@ async def test_mcp_stdio_lists_tools_with_required_schemas():
         "repo_path",
         "pattern",
     }
-    assert "path_glob" in tools_by_name["grep"].inputSchema["properties"]
-    assert "timeout_seconds" in tools_by_name["grep"].inputSchema["properties"]
+    grep_properties = tools_by_name["grep"].inputSchema["properties"]
+    assert "path_glob" in grep_properties
+    assert "timeout_seconds" in grep_properties
     assert set(tools_by_name["research"].inputSchema["required"]) == {
         "question",
         "repo_path",
     }
+    research_properties = tools_by_name["research"].inputSchema["properties"]
+    assert "path_glob" in research_properties
+    assert "max_results_per_query" in research_properties
+    assert "include_performance" in research_properties
+    assert "path_glob" in tools_by_name["research"].outputSchema["properties"]
+    assert set(tools_by_name["reason"].inputSchema["required"]) == {
+        "question",
+        "repo_path",
+    }
+    reason_properties = tools_by_name["reason"].inputSchema["properties"]
+    assert "reasoning_plan" in reason_properties
+    assert "read_strategy" in reason_properties
+    assert "max_files_to_read" in reason_properties
+    assert "path_glob" in reason_properties
     assert set(tools_by_name["server_status"].inputSchema["required"]) == {
         "repo_path",
     }
