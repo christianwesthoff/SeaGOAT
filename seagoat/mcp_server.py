@@ -88,6 +88,22 @@ class ServerStatusToolResult(BaseModel):
     start_command: str
 
 
+def _format_legacy_search_results(result: SearchToolResult) -> str:
+    if not result.results:
+        return "No results found."
+
+    output_lines: list[str] = []
+    for search_result in result.results:
+        output_lines.append(f"File: {search_result['path']}\n")
+        for block in search_result.get("blocks", []):
+            for line in block.get("lines", []):
+                output_lines.append(
+                    f"{line['line']}: {line.get('lineText', line.get('text', ''))}\n"
+                )
+            output_lines.append("\n")
+    return "".join(output_lines).rstrip()
+
+
 @mcp.tool()
 def search(
     query: str,
@@ -107,6 +123,29 @@ def search(
             include_performance=include_performance,
         )
     )
+
+
+@mcp.tool()
+def search_code(
+    query: str,
+    limit: int = 10,
+    repo_path: str = "",
+    context_above: int = 3,
+    context_below: int = 3,
+) -> str:
+    try:
+        result = SearchToolResult.model_validate(
+            run_search_tool(
+                query=query,
+                repo_path=repo_path,
+                max_results=limit,
+                context_above=context_above,
+                context_below=context_below,
+            )
+        )
+    except (FileNotFoundError, NotADirectoryError, RuntimeError, ValueError) as exc:
+        return f"Error: {exc}"
+    return _format_legacy_search_results(result)
 
 
 @mcp.tool()
@@ -206,3 +245,7 @@ def server_status(repo_path: str) -> ServerStatusToolResult:
 
 def main() -> None:
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()

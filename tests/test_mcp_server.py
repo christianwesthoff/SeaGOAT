@@ -12,6 +12,7 @@ from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
 from seagoat.cli import cli
+from seagoat.mcp_server import search_code
 from seagoat.mcp_tools.read_file import run_read_file_tool
 from seagoat.mcp_tools.reason import run_reason_tool
 from seagoat.mcp_tools.search import build_summary, run_search_tool, validate_repo_path
@@ -166,6 +167,54 @@ def test_run_search_tool_forwards_include_performance(tmp_path, mocker):
     assert result["performance"] == {"totalMilliseconds": 12.3}
 
 
+def test_search_code_formats_results_for_legacy_clients(tmp_path, mocker):
+    mocked_run_search_tool = mocker.patch(
+        "seagoat.mcp_server.run_search_tool",
+        return_value={
+            "summary": "ok",
+            "repo_path": str(tmp_path),
+            "server_address": "http://localhost:31337",
+            "result_count": 1,
+            "results": [
+                {
+                    "path": "test_file.py",
+                    "blocks": [
+                        {
+                            "lines": [
+                                {"line": 10, "lineText": "def test_func():"},
+                                {"line": 11, "lineText": "    pass"},
+                            ]
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+
+    result = search_code(
+        "test query",
+        limit=7,
+        repo_path=str(tmp_path),
+        context_above=2,
+        context_below=4,
+    )
+
+    mocked_run_search_tool.assert_called_once_with(
+        query="test query",
+        repo_path=str(tmp_path),
+        max_results=7,
+        context_above=2,
+        context_below=4,
+    )
+    assert result == "File: test_file.py\n10: def test_func():\n11:     pass"
+
+
+def test_search_code_returns_error_strings_for_invalid_input(tmp_path):
+    result = search_code("", repo_path=str(tmp_path))
+
+    assert result == "Error: query must not be empty"
+
+
 def test_run_read_file_tool_returns_bounded_line_range(tmp_path):
     file_path = tmp_path / "app" / "models" / "publishing.rb"
     file_path.parent.mkdir(parents=True)
@@ -312,6 +361,7 @@ async def test_mcp_stdio_lists_tools_with_required_schemas():
     tools_by_name = {tool.name: tool for tool in tools.tools}
     assert {
         "search",
+        "search_code",
         "read_file",
         "grep",
         "research",
@@ -324,6 +374,12 @@ async def test_mcp_stdio_lists_tools_with_required_schemas():
         "query",
         "repo_path",
     }
+    assert set(tools_by_name["search_code"].inputSchema["required"]) == {"query"}
+    search_code_properties = tools_by_name["search_code"].inputSchema["properties"]
+    assert "limit" in search_code_properties
+    assert "repo_path" in search_code_properties
+    assert "context_above" in search_code_properties
+    assert "context_below" in search_code_properties
     assert set(tools_by_name["read_file"].inputSchema["required"]) == {
         "repo_path",
         "file_path",

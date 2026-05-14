@@ -1,8 +1,9 @@
 <!-- markdownlint-disable MD046 -->
 # SeaGOAT MCP Integration
 
-SeaGOAT includes a native MCP server that Codex and other MCP clients can
-launch locally with `seagoat mcp-server`.
+SeaGOAT includes a native MCP server that Codex, Claude Desktop, and other MCP
+clients can launch locally with `seagoat mcp-server` or the dedicated
+`seagoat-mcp` entrypoint.
 
 ## Start the SeaGOAT repo server
 
@@ -26,12 +27,35 @@ Use the following command to register the MCP server with Codex:
 codex mcp add seagoat -- seagoat mcp-server
 ```
 
+## Register SeaGOAT with Claude Desktop
+
+Add SeaGOAT to your `claude_desktop_config.json` file.
+
+**macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+**Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+
+If SeaGOAT is on your `PATH`, point Claude Desktop at `seagoat-mcp`:
+
+```json
+{
+  "mcpServers": {
+    "seagoat": {
+      "command": "seagoat-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+If needed, you can also point directly to the installed executable path.
+
 ## Available tools
 
 SeaGOAT currently exposes these MCP tools:
 
 - `server_status(repo_path)`
 - `search(query, repo_path, max_results, context_above, context_below)`
+- `search_code(query, limit, repo_path, context_above, context_below)`
 - `read_file(repo_path, file_path, start_line, end_line)`
 - `grep(repo_path, pattern, max_results, case_sensitive, regex, path_glob, timeout_seconds)`
 - `research(question, repo_path, max_results_per_query, include_performance, path_glob)`
